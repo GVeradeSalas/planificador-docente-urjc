@@ -6,6 +6,15 @@ import unicodedata
 st.set_page_config(layout="wide", page_title="Planificador POD")
 st.title("Planificador Docente - Análisis de Compatibilidad y Ocupación")
 
+# --- FUNCIONES AUXILIARES Y ESTADO ---
+if 'seleccion_asignaturas' not in st.session_state:
+    st.session_state['seleccion_asignaturas'] = []
+
+def agregar_asignatura(asig_grupo):
+    """Callback para añadir una asignatura recomendada a la selección actual."""
+    if asig_grupo not in st.session_state['seleccion_asignaturas']:
+        st.session_state['seleccion_asignaturas'].append(asig_grupo)
+
 def simplificar_nombre(nombre):
     if pd.isna(nombre):
         return ""
@@ -132,7 +141,16 @@ else:
     df_disponibles = df_f3[df_f3['Horas_Disponibles'] > 0].copy()
     df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
     lista_opciones = sorted(list(df_disponibles['Asig_Grupo'].dropna().unique()))
-    asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos con vacantes:", lista_opciones)
+    
+    # Prevenir errores visuales si se aplican filtros sobre algo ya seleccionado
+    st.session_state['seleccion_asignaturas'] = [x for x in st.session_state['seleccion_asignaturas'] if x in lista_opciones]
+
+    # El multiselect ahora se nutre y nutre a st.session_state['seleccion_asignaturas']
+    asignaturas_elegidas = st.sidebar.multiselect(
+        "Elige los grupos con vacantes:", 
+        lista_opciones,
+        key='seleccion_asignaturas'
+    )
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
 
@@ -167,14 +185,13 @@ else:
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
             
-            # --- MOTOR DE RECOMENDACIONES ---
+            # --- MOTOR DE RECOMENDACIONES INTERACTIVO ---
             st.sidebar.markdown("---")
             st.sidebar.subheader("💡 Sugerencias Inteligentes")
             
-            # 1. Extraer el horario ocupado y los perfiles actuales
             grupos_sel = df_seleccion['Asig_Grupo'].unique()
             campus_sel = df_seleccion['Campus'].unique()
-            nombres_sel = df_seleccion['Asignatura'].unique() # AHORA USAMOS EL NOMBRE DE LA ASIGNATURA
+            nombres_sel = df_seleccion['Asignatura'].unique()
             
             busy_dict = {}
             for _, r in df_seleccion.iterrows():
@@ -182,7 +199,6 @@ else:
                     busy_dict[r['Fecha_str']] = []
                 busy_dict[r['Fecha_str']].append((r['Hora Inicio'], r['Hora Fin']))
             
-            # 2. Evaluar todas las asignaturas disponibles que NO estén ya seleccionadas
             df_eval = df_disponibles[~df_disponibles['Asig_Grupo'].isin(grupos_sel)]
             recomendaciones = []
             
@@ -190,7 +206,6 @@ else:
                 horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
                 if horas_disp <= 0: continue
                 
-                # Check de colisiones
                 tiene_solape = False
                 for _, r in df_grupo.iterrows():
                     f = r['Fecha_str']
@@ -204,15 +219,14 @@ else:
                 
                 if tiene_solape: continue
                 
-                # Scoring (Puntuación)
                 score = 0
                 campus_g = df_grupo['Campus'].iloc[0]
                 codigo_g = df_grupo['Código'].iloc[0]
                 nombre_g = df_grupo['Asignatura'].iloc[0]
                 
                 if campus_g in campus_sel: score += 10
-                if nombre_g in nombres_sel: score += 20 # Priorizar misma ASIGNATURA (ahorro de preparación)
-                if horas_disp <= horas_faltantes: score += 5 # Encaja perfecto en lo que te falta
+                if nombre_g in nombres_sel: score += 20 
+                if horas_disp <= horas_faltantes: score += 5 
                 
                 recomendaciones.append({
                     'Asig_Grupo': asig_grupo,
@@ -223,20 +237,24 @@ else:
                     'Score': score
                 })
             
-            # 3. Mostrar Top 3 y Expander para Top 10
+            # MOSTRAR RECOMENDACIONES CON BOTONES
             if recomendaciones:
                 recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
                 top_3 = recomendaciones[:3]
-                top_10 = recomendaciones[3:10] # Del 4º al 10º
+                top_10 = recomendaciones[3:10]
                 
-                st.sidebar.caption("Opciones compatibles con tu horario:")
+                st.sidebar.caption("Opciones compatibles listas para añadir:")
                 for rec in top_3:
-                    st.sidebar.info(f"**[{rec['Codigo']}] {rec['Nombre']}**\n\n🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h libres")
+                    st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h libres", unsafe_allow_html=True)
+                    st.sidebar.button("➕ Añadir a mi POD", key=f"btn_t3_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
+                    st.sidebar.markdown("---")
                     
                 if top_10:
                     with st.sidebar.expander("Ver más sugerencias (Top 10)"):
                         for rec in top_10:
-                            st.info(f"**[{rec['Codigo']}] {rec['Nombre']}**\n\n🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h libres")
+                            st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h libres", unsafe_allow_html=True)
+                            st.button("➕ Añadir a mi POD", key=f"btn_t10_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
+                            st.markdown("---")
             else:
                 st.sidebar.warning("No se han encontrado asignaturas compatibles con tu horario actual.")
 

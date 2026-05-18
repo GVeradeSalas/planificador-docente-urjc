@@ -190,6 +190,11 @@ else:
         st.sidebar.metric(label="⏱️ Horas Docentes Asumidas", value=f"{horas_totales_asumidas} h")
         st.sidebar.caption(f"Horas totales del conjunto de grupos: {horas_nominales} h")
         
+        # --- DEFINICIÓN DE COLORES COMPARTIDA ENTRE PESTAÑAS ---
+        paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
+        codigos_unicos = df_seleccion['Código'].unique()
+        mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(codigos_unicos)}
+
         tab1, tab2, tab3 = st.tabs([
             "⏰ Cuadrante Horario Semanal", 
             "📅 Calendario Semana a Semana", 
@@ -204,17 +209,12 @@ else:
             franjas_ordenadas = sorted(df_seleccion['Franja Horaria'].unique())
             dias_semana = ['L', 'M', 'X', 'J', 'V']
             
-            paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1"]
-            codigos_unicos = df_seleccion['Código'].unique()
-            mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(codigos_unicos)}
-            
-            # Construcción de HTML en línea para evitar el error del Markdown parser de Streamlit
             html_cuadrante = "<style>"
             html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
             html_cuadrante += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
             html_cuadrante += ".ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; }"
             html_cuadrante += ".hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; }"
-            html_cuadrante += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; }"
+            html_cuadrante += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }"
             html_cuadrante += ".card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; }"
             html_cuadrante += ".card-i { color: #555; }"
             html_cuadrante += "</style>"
@@ -241,31 +241,58 @@ else:
                 html_cuadrante += "</tr>"
                 
             html_cuadrante += "</table>"
-            
             st.markdown(html_cuadrante, unsafe_allow_html=True)
 
         with tab2:
             st.subheader("Seguimiento por Fechas Exactas")
+            st.write("Visualización cronológica semana a semana con tarjetas adaptables.")
+            
+            # 1. Calculamos el lunes de la semana para cada clase
             df_seleccion['Lunes_Semana'] = df_seleccion['Fecha_Obj'] - pd.to_timedelta(df_seleccion['Fecha_Obj'].dt.weekday, unit='d')
+            semanas_ordenadas = sorted(df_seleccion['Lunes_Semana'].dropna().unique())
             
-            def agrupar_fechas_cronologicas(sub_df):
-                clases = sub_df.sort_values('Hora Inicio')
-                lineas = []
-                for _, r in clases.iterrows():
-                    lineas.append(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) [{r['Hora Inicio']} - {r['Hora Fin']}]")
-                return "\n\n".join(lineas)
-                
-            df_pivot_cronologico = df_seleccion.groupby(['Lunes_Semana', 'Día']).apply(agrupar_fechas_cronologicas).reset_index(name='Clases')
-            df_cuadrante_crono = df_pivot_cronologico.pivot(index='Lunes_Semana', columns='Día', values='Clases').fillna("-")
-            
+            # 2. Mostramos SOLO los días que tienen clases para no estirar la tabla a lo tonto
             dias_semana_full = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
-            columnas_crono = [d for d in dias_semana_full if d in df_cuadrante_crono.columns]
-            df_cuadrante_crono = df_cuadrante_crono[columnas_crono]
+            dias_activos = [d for d in dias_semana_full if d in df_seleccion['Día'].values]
             
-            df_cuadrante_crono.index = "Semana " + df_cuadrante_crono.index.strftime('%d/%m/%Y')
-            df_cuadrante_crono.index.name = "Semana"
+            # 3. Construimos el HTML. (Ojo a position: sticky; en th para fijar la cabecera)
+            html_crono = "<style>"
+            html_crono += ".scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }"
+            html_crono += ".ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
+            html_crono += ".ht-crono th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1); }"
+            html_crono += ".ht-crono td { border: 1px solid #ddd; padding: 4px; vertical-align: top; background-color: #ffffff; }"
+            html_crono += ".hc-sem { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; z-index: 11; }"
+            html_crono += ".badge-hora { font-weight: bold; color: #111; font-size: 0.85em; margin-bottom: 3px; border-bottom: 1px dotted rgba(0,0,0,0.2); padding-bottom: 2px; }"
+            html_crono += "</style>"
             
-            st.dataframe(df_cuadrante_crono, use_container_width=True, height=500)
+            html_crono += "<div class='scroll-crono'><table class='ht-crono'>"
+            html_crono += "<tr><th class='hc-sem'>Semana</th>"
+            for d in dias_activos:
+                html_crono += f"<th>{d}</th>"
+            html_crono += "</tr>"
+            
+            for semana in semanas_ordenadas:
+                fecha_str = semana.strftime('%d/%m/%Y')
+                html_crono += f"<tr><td class='hc-sem'>Semana<br>{fecha_str}</td>"
+                
+                for dia in dias_activos:
+                    html_crono += "<td>"
+                    clases_celda = df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].sort_values('Hora Inicio')
+                    
+                    for _, r in clases_celda.iterrows():
+                        bg_color = mapa_colores.get(r['Código'], "#E3F2FD") # Mismo color que en la pestaña 1
+                        
+                        html_crono += f"<div class='card-min' style='background-color: {bg_color};'>"
+                        html_crono += f"<div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div>"
+                        html_crono += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
+                        html_crono += f"<div class='card-i'>Grupo: {r['Grupo']}</div>"
+                        html_crono += "</div>"
+                        
+                    html_crono += "</td>"
+                html_crono += "</tr>"
+                
+            html_crono += "</table></div>"
+            st.markdown(html_crono, unsafe_allow_html=True)
 
         with tab3:
             st.subheader("Análisis de Solapamientos")

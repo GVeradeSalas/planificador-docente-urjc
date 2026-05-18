@@ -80,7 +80,7 @@ def cargar_y_procesar(ruta_archivo):
             for fecha in fechas:
                 eventos.append({
                     'Código': codigo_raw,
-                    'Asignatura': row.get('Nombre Asignatura', 'Desconocido'),
+                    'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''),
                     'Titulación': row.get('Titulación', 'Desconocido'),
                     'Campus': row.get('Campus', 'Desconocido'),
                     'Semestre': semestre_actual,
@@ -103,7 +103,7 @@ def cargar_y_procesar(ruta_archivo):
             for fecha in fechas_calculadas:
                 eventos.append({
                     'Código': codigo_raw,
-                    'Asignatura': row.get('Nombre Asignatura', 'Desconocido'),
+                    'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''),
                     'Titulación': row.get('Titulación', 'Desconocido'),
                     'Campus': row.get('Campus', 'Desconocido'),
                     'Semestre': semestre_actual,
@@ -163,22 +163,22 @@ else:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
         df_unicos = df_seleccion.drop_duplicates(subset=['Código', 'Grupo'])
         
-        # --- NUEVO: DESLIZADORES DINÁMICOS DE HORAS ---
         st.sidebar.markdown("---")
         st.sidebar.subheader("Ajuste de Horas a Impartir")
         
         horas_asumidas_dict = {}
         for _, r in df_unicos.iterrows():
             max_h = int(r['Horas_Disponibles'])
-            titulo_slider = f"{r['Asignatura']} ({r['Grupo']})"
+            titulo_slider = f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})"
+            clave_unica = f"slider_{r['Código']}_{r['Grupo']}"
             
-            # El deslizador permite elegir desde 0 hasta el máximo de horas disponibles
             horas_elegidas = st.sidebar.slider(
                 titulo_slider, 
                 min_value=0, 
                 max_value=max_h, 
                 value=max_h, 
-                step=1
+                step=1,
+                key=clave_unica
             )
             horas_asumidas_dict[r['Asig_Grupo']] = horas_elegidas
             
@@ -198,31 +198,54 @@ else:
         
         with tab1:
             st.subheader("Distribución de Horas por Tramo Semanal")
-            st.write("Consolidación horaria de los grupos seleccionados.")
+            st.write("Si hay varias opciones en la misma hora, aparecerán apiladas de forma compacta.")
             
             df_seleccion['Franja Horaria'] = df_seleccion['Hora Inicio'] + " - " + df_seleccion['Hora Fin']
+            franjas_ordenadas = sorted(df_seleccion['Franja Horaria'].unique())
+            dias_semana = ['L', 'M', 'X', 'J', 'V']
             
-            def consolidar_bloques_semanales(sub_df):
-                lineas = []
-                for _, r in sub_df.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-                    h_asumidas = horas_asumidas_dict.get(r['Asig_Grupo'], r['Horas_Disponibles'])
-                    lineas.append(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})\nAsumes: {h_asumidas}h (de {r['Horas_Disponibles']} disp.)")
-                return "\n\n".join(lineas)
+            paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1"]
+            codigos_unicos = df_seleccion['Código'].unique()
+            mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(codigos_unicos)}
             
-            df_pivot_semanal = df_seleccion.groupby(['Franja Horaria', 'Día']).apply(consolidar_bloques_semanales).reset_index(name='Contenido')
-            df_cuadrante_fijo = df_pivot_semanal.pivot(index='Franja Horaria', columns='Día', values='Contenido').fillna("-")
+            # Construcción de HTML en línea para evitar el error del Markdown parser de Streamlit
+            html_cuadrante = "<style>"
+            html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
+            html_cuadrante += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
+            html_cuadrante += ".ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; }"
+            html_cuadrante += ".hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; }"
+            html_cuadrante += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; }"
+            html_cuadrante += ".card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; }"
+            html_cuadrante += ".card-i { color: #555; }"
+            html_cuadrante += "</style>"
+            html_cuadrante += "<table class='ht'>"
+            html_cuadrante += "<tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
             
-            dias_semana = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
-            columnas_ordenadas = [d for d in dias_semana if d in df_cuadrante_fijo.columns]
-            df_cuadrante_fijo = df_cuadrante_fijo[columnas_ordenadas]
-            df_cuadrante_fijo = df_cuadrante_fijo.sort_index()
+            for franja in franjas_ordenadas:
+                html_cuadrante += f"<tr><td class='hc'>{franja}</td>"
+                for dia in dias_semana:
+                    html_cuadrante += "<td>"
+                    
+                    clases_celda = df_seleccion[(df_seleccion['Franja Horaria'] == franja) & (df_seleccion['Día'] == dia)]
+                    clases_unicas_celda = clases_celda.drop_duplicates(subset=['Código', 'Grupo'])
+                    
+                    for _, r in clases_unicas_celda.iterrows():
+                        bg_color = mapa_colores[r['Código']]
+                        h_asumidas = horas_asumidas_dict.get(r['Asig_Grupo'], r['Horas_Disponibles'])
+                        
+                        html_cuadrante += f"<div class='card-min' style='background-color: {bg_color};'>"
+                        html_cuadrante += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
+                        html_cuadrante += f"<div class='card-i'>{r['Grupo']} ({h_asumidas}h)</div>"
+                        html_cuadrante += "</div>"
+                    html_cuadrante += "</td>"
+                html_cuadrante += "</tr>"
+                
+            html_cuadrante += "</table>"
             
-            st.dataframe(df_cuadrante_fijo, use_container_width=True, height=450)
+            st.markdown(html_cuadrante, unsafe_allow_html=True)
 
         with tab2:
             st.subheader("Seguimiento por Fechas Exactas")
-            st.write("Estructura por semanas naturales para vigilar alternancias en el calendario.")
-            
             df_seleccion['Lunes_Semana'] = df_seleccion['Fecha_Obj'] - pd.to_timedelta(df_seleccion['Fecha_Obj'].dt.weekday, unit='d')
             
             def agrupar_fechas_cronologicas(sub_df):
@@ -234,7 +257,9 @@ else:
                 
             df_pivot_cronologico = df_seleccion.groupby(['Lunes_Semana', 'Día']).apply(agrupar_fechas_cronologicas).reset_index(name='Clases')
             df_cuadrante_crono = df_pivot_cronologico.pivot(index='Lunes_Semana', columns='Día', values='Clases').fillna("-")
-            columnas_crono = [d for d in dias_semana if d in df_cuadrante_crono.columns]
+            
+            dias_semana_full = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
+            columnas_crono = [d for d in dias_semana_full if d in df_cuadrante_crono.columns]
             df_cuadrante_crono = df_cuadrante_crono[columnas_crono]
             
             df_cuadrante_crono.index = "Semana " + df_cuadrante_crono.index.strftime('%d/%m/%Y')

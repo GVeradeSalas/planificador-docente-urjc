@@ -1,9 +1,38 @@
 import streamlit as st
 import pandas as pd
 import re
+import unicodedata
 
 st.set_page_config(layout="wide", page_title="Planificador POD")
 st.title("Planificador Docente - Análisis de Compatibilidad y Ocupación")
+
+def simplificar_nombre(nombre):
+    """Limpia tildes y pasa a minúsculas para facilitar el cruce de nombres entre Excels."""
+    if pd.isna(nombre):
+        return ""
+    n = unicodedata.normalize('NFD', str(nombre)).encode('ascii', 'ignore').decode('utf-8')
+    return n.lower()
+
+def buscar_fuerza_profesor(nombre_pod, df_fuerza):
+    """Busca al profesor en el archivo de Fuerza Docente flexibilizando el orden de apellidos/nombre."""
+    if df_fuerza.empty or 'Nombre' not in df_fuerza.columns:
+        return None
+    
+    nombre_pod_clean = simplificar_nombre(nombre_pod)
+    partes_pod = nombre_pod_clean.replace(',', ' ').split()
+    
+    for _, row in df_fuerza.iterrows():
+        nombre_f_clean = simplificar_nombre(row['Nombre'])
+        
+        # Comprobamos si todas las palabras clave del nombre en el POD están en el registro de Fuerza Docente
+        match = True
+        for p in partes_pod:
+            if p not in nombre_f_clean:
+                match = False
+                break
+        if match:
+            return row
+    return None
 
 def generar_fechas_fijas(dia_letra, semestre_str):
     mapa_dias = {'L': 0, 'M': 1, 'X': 2, 'J': 3, 'V': 4, 'S': 5, 'D': 6}
@@ -24,6 +53,14 @@ def generar_fechas_fijas(dia_letra, semestre_str):
     fechas = pd.date_range(start=start_date, end=end_date, freq='D')
     fechas_filtradas = fechas[fechas.weekday == num_dia]
     return [f.strftime('%d/%m/%y') for f in fechas_filtradas]
+
+@st.cache_data
+def cargar_fuerza_docente(ruta_archivo):
+    try:
+        df = pd.read_excel(ruta_archivo, skiprows=1)
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 @st.cache_data
 def cargar_y_procesar(ruta_archivo):
@@ -127,6 +164,7 @@ def cargar_y_procesar(ruta_archivo):
 
 # --- CARGA DE DATOS ---
 df_eventos = cargar_y_procesar("POD_2026-27_11-5-2026.xlsx")
+df_fuerza = cargar_fuerza_docente("Fuerza Docente.xlsx")
 
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
@@ -159,6 +197,8 @@ else:
     lista_opciones = sorted(list(df_disponibles['Asig_Grupo'].dropna().unique()))
     asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos con vacantes:", lista_opciones)
 
+    paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
+
     if asignaturas_elegidas:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
         df_unicos = df_seleccion.drop_duplicates(subset=['Código', 'Grupo'])
@@ -173,41 +213,44 @@ else:
             clave_unica = f"slider_{r['Código']}_{r['Grupo']}"
             
             horas_elegidas = st.sidebar.slider(
-                titulo_slider, 
-                min_value=0, 
-                max_value=max_h, 
-                value=max_h, 
-                step=1,
-                key=clave_unica
+                titulo_slider, min_value=0, max_value=max_h, value=max_h, step=1, key=clave_unica
             )
             horas_asumidas_dict[r['Asig_Grupo']] = horas_elegidas
             
         horas_totales_asumidas = sum(horas_asumidas_dict.values())
-        horas_nominales = df_unicos['Horas_Totales'].sum()
         
         st.sidebar.markdown("---")
-        st.sidebar.subheader("Resumen de Carga Docente")
+        st.sidebar.subheader("Progreso Docente (POD)")
+        objetivo_horas = st.sidebar.number_input("🎯 Tu objetivo de horas:", min_value=1, value=240, step=10)
+        
+        progreso = min(horas_totales_asumidas / objetivo_horas, 1.0)
+        st.sidebar.progress(progreso)
         st.sidebar.metric(label="⏱️ Horas Docentes Asumidas", value=f"{horas_totales_asumidas} h")
-        st.sidebar.caption(f"Horas totales del conjunto de grupos: {horas_nominales} h")
         
-        # --- DEFINICIÓN DE COLORES COMPARTIDA ENTRE PESTAÑAS ---
-        paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
-        codigos_unicos = df_seleccion['Código'].unique()
-        mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(codigos_unicos)}
-
-        tab1, tab2, tab3 = st.tabs([
-            "⏰ Cuadrante Horario Semanal", 
-            "📅 Calendario Semana a Semana", 
-            "📊 Análisis de Conflictos"
-        ])
-        
-        with tab1:
-            st.subheader("Distribución de Horas por Tramo Semanal")
-            st.write("Si hay varias opciones en la misma hora, aparecerán apiladas de forma compacta.")
+        if horas_totales_asumidas < objetivo_horas:
+            st.sidebar.caption(f"Te faltan **{objetivo_horas - horas_totales_asumidas} h** para completar tu POD ({int(progreso*100)}%).")
+        else:
+            st.sidebar.success("✅ ¡Has alcanzado o superado tu objetivo de horas!")
             
+    else:
+        df_seleccion = pd.DataFrame()
+        st.sidebar.info("👈 Selecciona asignaturas para iniciar tu planificación.")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "⏰ Cuadrante Semanal", 
+        "📅 Calendario Completo", 
+        "📊 Conflictos",
+        "🧑‍🏫 Buscador de Compañeros"
+    ])
+    
+    with tab1:
+        if not df_seleccion.empty:
             df_seleccion['Franja Horaria'] = df_seleccion['Hora Inicio'] + " - " + df_seleccion['Hora Fin']
             franjas_ordenadas = sorted(df_seleccion['Franja Horaria'].unique())
             dias_semana = ['L', 'M', 'X', 'J', 'V']
+            
+            codigos_unicos = df_seleccion['Código'].unique()
+            mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(codigos_unicos)}
             
             html_cuadrante = "<style>"
             html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
@@ -225,7 +268,6 @@ else:
                 html_cuadrante += f"<tr><td class='hc'>{franja}</td>"
                 for dia in dias_semana:
                     html_cuadrante += "<td>"
-                    
                     clases_celda = df_seleccion[(df_seleccion['Franja Horaria'] == franja) & (df_seleccion['Día'] == dia)]
                     clases_unicas_celda = clases_celda.drop_duplicates(subset=['Código', 'Grupo'])
                     
@@ -242,20 +284,16 @@ else:
                 
             html_cuadrante += "</table>"
             st.markdown(html_cuadrante, unsafe_allow_html=True)
+        else:
+            st.info("Sin asignaturas seleccionadas.")
 
-        with tab2:
-            st.subheader("Seguimiento por Fechas Exactas")
-            st.write("Visualización cronológica semana a semana con tarjetas adaptables.")
-            
-            # 1. Calculamos el lunes de la semana para cada clase
+    with tab2:
+        if not df_seleccion.empty:
             df_seleccion['Lunes_Semana'] = df_seleccion['Fecha_Obj'] - pd.to_timedelta(df_seleccion['Fecha_Obj'].dt.weekday, unit='d')
             semanas_ordenadas = sorted(df_seleccion['Lunes_Semana'].dropna().unique())
-            
-            # 2. Mostramos SOLO los días que tienen clases para no estirar la tabla a lo tonto
             dias_semana_full = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
             dias_activos = [d for d in dias_semana_full if d in df_seleccion['Día'].values]
             
-            # 3. Construimos el HTML. (Ojo a position: sticky; en th para fijar la cabecera)
             html_crono = "<style>"
             html_crono += ".scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }"
             html_crono += ".ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
@@ -274,31 +312,28 @@ else:
             for semana in semanas_ordenadas:
                 fecha_str = semana.strftime('%d/%m/%Y')
                 html_crono += f"<tr><td class='hc-sem'>Semana<br>{fecha_str}</td>"
-                
                 for dia in dias_activos:
                     html_crono += "<td>"
                     clases_celda = df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].sort_values('Hora Inicio')
-                    
                     for _, r in clases_celda.iterrows():
-                        bg_color = mapa_colores.get(r['Código'], "#E3F2FD") # Mismo color que en la pestaña 1
-                        
+                        bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
                         html_crono += f"<div class='card-min' style='background-color: {bg_color};'>"
                         html_crono += f"<div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div>"
                         html_crono += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
                         html_crono += f"<div class='card-i'>Grupo: {r['Grupo']}</div>"
                         html_crono += "</div>"
-                        
                     html_crono += "</td>"
                 html_crono += "</tr>"
                 
             html_crono += "</table></div>"
             st.markdown(html_crono, unsafe_allow_html=True)
+        else:
+            st.info("Sin asignaturas seleccionadas.")
 
-        with tab3:
-            st.subheader("Análisis de Solapamientos")
+    with tab3:
+        if not df_seleccion.empty:
             conflictos = []
             df_seleccion_ordenada = df_seleccion.sort_values(by=['Fecha_Obj', 'Hora Inicio'])
-            
             for fecha, grupo_fecha in df_seleccion_ordenada.groupby('Fecha_str'):
                 if len(grupo_fecha) > 1:
                     clases = grupo_fecha.to_dict('records')
@@ -306,13 +341,10 @@ else:
                         for j in range(i + 1, len(clases)):
                             inicio1, fin1 = clases[i]['Hora Inicio'], clases[i]['Hora Fin']
                             inicio2, fin2 = clases[j]['Hora Inicio'], clases[j]['Hora Fin']
-                            
                             if inicio1 < fin2 and inicio2 < fin1:
-                                un_id1 = f"[{clases[i]['Código']}] {clases[i]['Asignatura']} ({clases[i]['Grupo']})"
-                                un_id2 = f"[{clases[j]['Código']}] {clases[j]['Asignatura']} ({clases[j]['Grupo']})"
                                 conflictos.append({
                                     'Fecha': fecha,
-                                    'Conflicto': f"{un_id1} ({inicio1}-{fin1}) se cruza con {un_id2} ({inicio2}-{fin2})"
+                                    'Conflicto': f"[{clases[i]['Código']}] {clases[i]['Grupo']} ({inicio1}-{fin1}) choca con [{clases[j]['Código']}] {clases[j]['Grupo']} ({inicio2}-{fin2})"
                                 })
 
             if conflictos:
@@ -321,11 +353,85 @@ else:
                     st.write(f"**{c['Fecha']}:** {c['Conflicto']}")
             else:
                 st.success("✅ Todas las asignaturas seleccionadas son perfectamente compatibles en las fechas del calendario.")
+        else:
+            st.info("Sin asignaturas seleccionadas.")
 
-            st.dataframe(
-                df_seleccion_ordenada[['Fecha_str', 'Hora Inicio', 'Hora Fin', 'Código', 'Asignatura', 'Grupo', 'Profesor_Original', 'Horas_Disponibles', 'Campus']], 
-                use_container_width=True
-            )
-
-    else:
-        st.info("👈 Utiliza el menú lateral para configurar los filtros y seleccionar los grupos con sus respectivos estados de vacantes.")
+    with tab4:
+        st.subheader("Buscador de Horarios de Compañeros")
+        
+        lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
+        prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores)
+        
+        if prof_buscado != "-- Seleccionar --":
+            df_prof = df_eventos[df_eventos['Profesor_Original'] == prof_buscado].copy()
+            horas_prof = df_prof.drop_duplicates(subset=['Código', 'Grupo'])['Horas_Profesor'].sum()
+            
+            st.markdown("---")
+            
+            info_fuerza = buscar_fuerza_profesor(prof_buscado, df_fuerza)
+            
+            if info_fuerza is not None:
+                fuerza_real = pd.to_numeric(info_fuerza.get('Fuerza', 240), errors='coerce')
+                fuerza_real = 240 if pd.isna(fuerza_real) else fuerza_real
+                
+                descargas = pd.to_numeric(info_fuerza.get('DescargaTotal', 0), errors='coerce')
+                descargas = 0 if pd.isna(descargas) else descargas
+                
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    st.metric(label=f"Horas asignadas", value=f"{horas_prof} h")
+                with col2:
+                    etiqueta_delta = f"{descargas}h reducciones" if descargas < 0 else (f"-{descargas}h reducciones" if descargas > 0 else None)
+                    st.metric(label=f"POD Objetivo (Fuerza)", value=f"{fuerza_real} h", delta=etiqueta_delta, delta_color="off")
+                with col3:
+                    if horas_prof < fuerza_real:
+                        st.warning(f"💡 **Posible participación en 2ª vuelta.** Le faltan {fuerza_real - horas_prof}h para completar su POD.")
+                    else:
+                        st.success("✅ **POD completo o superado.** Es poco probable que necesite coger más horas.")
+            else:
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.metric(label=f"Horas asignadas", value=f"{horas_prof} h")
+                with col2:
+                    if horas_prof < 240:
+                        st.warning(f"💡 **Fuerza exacta desconocida.** Asumiendo un estándar de 240h, le faltarían {240 - horas_prof}h.")
+                    else:
+                        st.success("✅ **POD aparentemente completo (>240h).**")
+            
+            st.markdown("#### Cuadrante Semanal")
+            df_prof['Franja Horaria'] = df_prof['Hora Inicio'] + " - " + df_prof['Hora Fin']
+            franjas_prof = sorted(df_prof['Franja Horaria'].unique())
+            
+            html_prof = "<style>"
+            html_prof += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
+            html_prof += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
+            html_prof += ".ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; }"
+            html_prof += ".hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; }"
+            html_prof += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }"
+            html_prof += "</style>"
+            html_prof += "<table class='ht'>"
+            html_prof += "<tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
+            
+            if franjas_prof:
+                for franja in franjas_prof:
+                    html_prof += f"<tr><td class='hc'>{franja}</td>"
+                    for dia in ['L', 'M', 'X', 'J', 'V']:
+                        html_prof += "<td>"
+                        clases_celda = df_prof[(df_prof['Franja Horaria'] == franja) & (df_prof['Día'] == dia)]
+                        clases_unicas_celda = clases_celda.drop_duplicates(subset=['Código', 'Grupo'])
+                        
+                        for _, r in clases_unicas_celda.iterrows():
+                            bg_color = paleta[abs(hash(r['Código'])) % len(paleta)]
+                            html_prof += f"<div class='card-min' style='background-color: {bg_color};'>"
+                            html_prof += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
+                            html_prof += f"<div class='card-i'>{r['Grupo']} ({r['Horas_Profesor']}h)</div>"
+                            html_prof += "</div>"
+                        html_prof += "</td>"
+                    html_prof += "</tr>"
+            else:
+                html_prof += "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No hay clases registradas en el POD para este docente.</td></tr>"
+                
+            html_prof += "</table>"
+            st.markdown(html_prof, unsafe_allow_html=True)
+        else:
+            st.info("Utiliza el desplegable para buscar el horario y estado del POD de un compañero.")

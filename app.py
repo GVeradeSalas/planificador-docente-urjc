@@ -303,22 +303,40 @@ else:
             st.markdown("### 📜 Normativa de Primera Vuelta")
             alertas_normativa = []
             
+            # Recopilar qué grupos se han seleccionado de cada código de asignatura
+            grupos_sel_normativa = {}
+            for _, r in df_unicos.iterrows():
+                h_asum = horas_asumidas_dict.get(f"{r['Código']}_{r['Grupo']}", 0)
+                if h_asum > 0:
+                    if r['Código'] not in grupos_sel_normativa:
+                        grupos_sel_normativa[r['Código']] = {}
+                    grupos_sel_normativa[r['Código']][str(r['Grupo']).strip()] = r['Asignatura']
+            
             for _, r in df_unicos.iterrows():
                 clave_id = f"{r['Código']}_{r['Grupo']}"
                 max_h = int(r['Horas_Disponibles'])
                 h_asum = horas_asumidas_dict.get(clave_id, 0)
+                grupo_str = str(r['Grupo']).strip()
                 
-                # Comprobar si no es el 100% ni el 50% exacto (cubriendo redondeos impares)
-                if h_asum > 0 and h_asum != max_h and h_asum != (max_h // 2) and h_asum != ((max_h + 1) // 2):
-                    alertas_normativa.append(f"**[{r['Código']}] {r['Asignatura']} ({r['Grupo']})**: Has seleccionado {h_asum}h de {max_h}h. En 1ª vuelta se debe coger la asignatura/teoría completa o exactamente la mitad.")
+                if h_asum > 0:
+                    # 1. Comprobar fracciones de horas (100% o 50%)
+                    if h_asum != max_h and h_asum != (max_h // 2) and h_asum != ((max_h + 1) // 2):
+                        alertas_normativa.append(f"**[{r['Código']}] {r['Asignatura']} ({r['Grupo']})**: Has seleccionado {h_asum}h de {max_h}h. Debes coger la carga completa o exactamente la mitad.")
+                    
+                    # 2. Comprobar desdobles huérfanos (Ej: elegir M1P1 sin haber elegido M1)
+                    match_desdoble = re.search(r'^(.*?)(P\d+)$', grupo_str, re.IGNORECASE)
+                    if match_desdoble:
+                        grupo_madre = match_desdoble.group(1).strip()
+                        if grupo_madre and grupo_madre not in grupos_sel_normativa.get(r['Código'], {}):
+                            alertas_normativa.append(f"**[{r['Código']}] {r['Asignatura']}**: Has seleccionado el desdoble **{grupo_str}**, pero no has seleccionado el grupo principal de teoría (**{grupo_madre}**). No puedes coger prácticas sin su teoría.")
             
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa:
                     st.write(f"- {alerta}")
-                st.caption("Nota: Se permite coger la mitad de las horas si el grupo incluye desdobles. Revisa tu selección de los deslizadores.")
+                st.caption("Revisa tu selección en el menú lateral y los deslizadores de horas.")
             else:
-                st.success("✅ **Normativa de 1ª Vuelta:** Todas las fracciones de horas seleccionadas cumplen con coger el 100% o el 50% de su bloque correspondiente.")
+                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones y desdobles cumplen con la normativa del departamento.")
 
             st.markdown("---")
 

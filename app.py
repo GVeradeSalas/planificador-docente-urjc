@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import unicodedata
+import datetime
 
 st.set_page_config(layout="wide", page_title="Planificador POD")
 st.title("Planificador Docente - Análisis de Compatibilidad y Ocupación")
@@ -175,10 +176,20 @@ else:
     titulaciones_elegidas = st.sidebar.multiselect("Titulaciones:", sorted(list(df_f2['Titulación'].dropna().unique())))
     df_f3 = df_f2[df_f2['Titulación'].isin(titulaciones_elegidas)] if titulaciones_elegidas else df_f2
 
+    # --- NUEVO FILTRO: DESLIZADOR DE HORAS ---
     st.sidebar.header("2. ⏱️ Filtros y Disponibilidad")
-    turnos_disp = sorted(list(df_f3['Turno'].dropna().unique()))
-    turnos_elegidos = st.sidebar.multiselect("Turno (Mañana/Tarde):", turnos_disp, default=turnos_disp)
-    df_f4 = df_f3[df_f3['Turno'].isin(turnos_elegidos)] if turnos_elegidos else df_f3
+    min_t, max_t = datetime.time(8, 0), datetime.time(22, 0)
+    rango_horas = st.sidebar.slider(
+        "Rango horario de clases:",
+        min_value=min_t, max_value=max_t,
+        value=(min_t, max_t),
+        format="HH:mm"
+    )
+    start_str = rango_horas[0].strftime("%H:%M")
+    end_str = rango_horas[1].strftime("%H:%M")
+    
+    # Filtramos para que la clase esté completamente dentro del rango
+    df_f4 = df_f3[(df_f3['Hora Inicio'] >= start_str) & (df_f3['Hora Fin'] <= end_str)]
 
     ocultar_compartidas = st.sidebar.checkbox("Ocultar asignaturas compartidas (ya empezadas)")
     if ocultar_compartidas:
@@ -653,7 +664,6 @@ else:
         
         pct_global = (total_asignadas / total_horas_area) * 100 if total_horas_area > 0 else 0
         
-        # Procesamos a los profesores para el segundo balance
         datos_profs = []
         horas_por_prof = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
         profs_procesados = set()
@@ -677,7 +687,7 @@ else:
                         profs_procesados.add(nom_pod)
                         
                 pct = min(h_asig / fuerza, 1.0) if fuerza > 0 else 0.0
-                is_finished = pct >= 1.0 or (fuerza - h_asig) <= 9
+                is_finished = pct >= 1.0 or (fuerza - h_asig) <= 8
                 
                 datos_profs.append({
                     'Original_Index': row_f['Index_Orig'],
@@ -706,7 +716,6 @@ else:
                     'Estado': ""
                 })
 
-        # --- BALANCE ACTIVO ---
         fuerza_activos = sum(p['Objetivo (Fuerza)'] for p in datos_profs if p['Horas Asignadas'] > 0)
         asignadas_activos = sum(p['Horas Asignadas'] for p in datos_profs if p['Horas Asignadas'] > 0)
         balance_activo = asignadas_activos - fuerza_activos
@@ -727,7 +736,6 @@ else:
         if datos_profs:
             hay_profesores_sin_horas = any(p['Horas Asignadas'] == 0 and p['Original_Index'] != 9999 for p in datos_profs)
             
-            # Ordenamos estrictamente por el índice original de Fuerza Docente
             sorted_profs = sorted(datos_profs, key=lambda x: x['Original_Index'])
             found_next = False
             
@@ -751,7 +759,6 @@ else:
                         else:
                             p['Estado'] = "En espera ⏳"
             
-            # Reordenamos visualmente: primero los no terminados, luego los completados
             sorted_profs_display = sorted(sorted_profs, key=lambda x: (x['Is_Finished'], x['Original_Index']))
             
             for p in sorted_profs_display:

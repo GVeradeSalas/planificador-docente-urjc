@@ -61,7 +61,9 @@ def cargar_y_procesar(ruta_archivo):
     eventos = []
     patron_con_fechas = r'([LMXJVSD])=>\((.*?)-(.*?)\)\[(.*?)\]'
     patron_fijo = r'([LMXJVSD])(?:=>)?\s*\(\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*\)(?!\[)'
-    patron_profesor = r'([^\(]+)\s*\((\d+)\)'
+    
+    # NUEVO PATRÓN: Atrapa el nombre y el primer número dentro del paréntesis ignorando /48 o "h"
+    patron_profesor = r'([^\(]+)\s*\(\s*(\d+)[^\)]*\)'
     
     for index, row in df_crudo.dropna(subset=['Horario']).iterrows():
         horario_str = str(row['Horario']).strip()
@@ -290,15 +292,12 @@ else:
             st.markdown("### 📜 Normativa de Primera Vuelta")
             alertas_normativa = []
             
-            # Paso 1: Agrupar la selección por familias (Teoría + todos sus Desdobles)
             familias_evaluadas = {}
             for _, r in df_unicos.iterrows():
                 codigo = r['Código']
                 grupo_str = str(r['Grupo']).strip()
                 h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
                 
-                # Expresión regular que detecta y corta prefijos tipo G1P2 o P1 al final del grupo
-                # Ej: AMG1P2 -> AM | M1P1 -> M1
                 if h_asum > 0:
                     madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
                     clave_familia = f"{codigo}_{madre_calc}"
@@ -314,7 +313,6 @@ else:
             def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
             def is_full(h, H): return H > 0 and h == H
 
-            # Paso 2: Auditar que cada familia cumpla las 3 reglas de oro
             for clave, info in familias_evaluadas.items():
                 codigo = info['codigo']
                 madre = info['madre']
@@ -322,7 +320,6 @@ else:
                 
                 df_asig = df_disponibles[df_disponibles['Código'] == codigo]
                 
-                # Identificar todos los grupos que pertenecen a esta madre (teoría y prácticas)
                 desdobles_disponibles = []
                 for _, r_disp in df_asig.drop_duplicates(subset=['Grupo']).iterrows():
                     g_disp = str(r_disp['Grupo']).strip()
@@ -339,7 +336,6 @@ else:
                     if Hp > 0 or hp > 0:
                         P_data.append((p, hp, Hp))
                 
-                # Evaluamos los tres escenarios legales
                 todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
                 mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
                 cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
@@ -443,7 +439,6 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- NUEVO: AUDITORÍA DE NORMATIVA DEL COMPAÑERO ---
             st.markdown("#### 📜 Auditoría de Normativa de Compañero")
             alertas_normativa_prof = []
             

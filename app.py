@@ -72,7 +72,6 @@ def cargar_y_procesar(ruta_archivo):
             
         celda_prof = str(row.get('Profesores', '')).strip()
         
-        # --- NUEVA LÓGICA DE EXTRACCIÓN MÚLTIPLE DE PROFESORES ---
         if celda_prof == '' or celda_prof.lower() in ['no', 'nan']:
             lista_profs = [("Ninguno", 0)]
             horas_disponibles = horas_totales
@@ -82,11 +81,9 @@ def cargar_y_procesar(ruta_archivo):
             horas_ocupadas = 0
             nombres_desc = []
             
-            # Separamos por coma o por " y "
             segmentos = re.split(r',|\by\b', celda_prof, flags=re.IGNORECASE)
             for seg in segmentos:
                 if not seg.strip(): continue
-                # Busca el nombre y su número (ignorando /48, /24, h...)
                 match = re.search(r'([^\(]+)\s*\(\s*(\d+)[^\)]*\)', seg)
                 if match:
                     nom = match.group(1).strip()
@@ -111,7 +108,6 @@ def cargar_y_procesar(ruta_archivo):
 
         semestre_actual = row.get('Semestre', 'Desconocido')
         
-        # Guardar eventos CLONADOS para cada profesor que comparta la asignatura
         for prof_nombre, prof_horas in lista_profs:
             for match in re.findall(patron_con_fechas, horario_str):
                 dia, hora_inicio, hora_fin, fechas_str = match
@@ -164,7 +160,6 @@ else:
 
     if asignaturas_elegidas:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
-        # Aseguramos unificar la vista para ti (sin duplicados por profesor)
         df_unicos = df_seleccion.drop_duplicates(subset=['Código', 'Grupo'])
         
         st.sidebar.markdown("---")
@@ -302,7 +297,7 @@ else:
                 html += f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>"
                 for dia in dias_activos:
                     html += "<td>"
-                    for _, r in df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo', 'Hora Inicio']).sort_values('Hora Inicio').iterrows():
+                    for _, r in df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].sort_values('Hora Inicio').iterrows():
                         html += f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>"
                     html += "</td>"
                 html += "</tr>"
@@ -437,24 +432,36 @@ else:
             st.markdown("---")
             info_fuerza = buscar_fuerza_profesor(prof_buscado, df_fuerza)
             
+            fuerza_real = 240
+            descargas = 0
             if info_fuerza is not None:
                 fuerza_real = pd.to_numeric(info_fuerza.get('Fuerza', 240), errors='coerce')
-                fuerza_real = 240 if pd.isna(fuerza_real) else fuerza_real
+                fuerza_real = 240 if pd.isna(fuerza_real) or fuerza_real == 0 else fuerza_real
                 descargas = pd.to_numeric(info_fuerza.get('DescargaTotal', 0), errors='coerce')
                 descargas = 0 if pd.isna(descargas) else descargas
+            
+            porcentaje_exacto = (horas_prof / fuerza_real) * 100 if fuerza_real > 0 else 0
+            
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1: 
+                st.metric(label="Horas asignadas", value=f"{horas_prof} h")
+            with col2: 
+                if info_fuerza is not None:
+                    st.metric(label="POD Objetivo (Fuerza)", value=f"{fuerza_real} h", delta=f"-{descargas}h reducciones" if descargas != 0 else None, delta_color="off")
+                else:
+                    st.metric(label="POD Objetivo (Estimado)", value="240 h")
+            
+            with col3:
+                st.write(f"**Progreso del POD: {porcentaje_exacto:.1f}%**")
+                progreso_barra = min(horas_prof / fuerza_real, 1.0) if fuerza_real > 0 else 0.0
+                st.progress(progreso_barra)
                 
-                col1, col2, col3 = st.columns([1, 1, 2])
-                with col1: st.metric(label="Horas asignadas", value=f"{horas_prof} h")
-                with col2: st.metric(label="POD Objetivo (Fuerza)", value=f"{fuerza_real} h", delta=f"-{descargas}h reducciones" if descargas != 0 else None, delta_color="off")
-                with col3:
-                    if horas_prof < fuerza_real: st.warning(f"💡 **Participará en siguientes vueltas.** Le faltan {fuerza_real - horas_prof}h.")
-                    else: st.success("✅ **POD completo o superado.** POD cubierto al 100%.")
-            else:
-                col1, col2 = st.columns([1, 2])
-                with col1: st.metric(label="Horas asignadas", value=f"{horas_prof} h")
-                with col2:
-                    if horas_prof < 240: st.warning(f"💡 **Fuerza teórica (240h).** Le faltarían {240 - horas_prof}h para completar.")
-                    else: st.success("✅ **POD aparentemente completo (>240h).**")
+                if horas_prof < fuerza_real: 
+                    st.warning(f"💡 **Faltan {fuerza_real - horas_prof}h** (Participará en siguientes vueltas).")
+                elif horas_prof == fuerza_real: 
+                    st.success("✅ **POD completado exactamente al 100%.**")
+                else: 
+                    st.success(f"🔥 **POD superado por {horas_prof - fuerza_real}h** (Por encima del 100%).")
             
             st.markdown("<br>", unsafe_allow_html=True)
             

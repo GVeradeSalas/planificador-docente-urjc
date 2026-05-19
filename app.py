@@ -214,7 +214,13 @@ else:
     rango_horas = st.sidebar.slider("Rango horario de clases:", min_value=min_t, max_value=max_t, value=(min_t, max_t), format="HH:mm")
     start_str = rango_horas[0].strftime("%H:%M")
     end_str = rango_horas[1].strftime("%H:%M")
-    df_f4 = df_f3[(df_f3['Hora Inicio'] >= start_str) & (df_f3['Hora Fin'] <= end_str)]
+    
+    # NUEVA LÓGICA: Exclusión estricta de asignaturas fuera de rango
+    claves_asignaturas = df_f3['Código'] + "_" + df_f3['Grupo'].astype(str)
+    condicion_fuera_rango = (df_f3['Hora Inicio'] < start_str) | (df_f3['Hora Fin'] > end_str)
+    claves_fuera = df_f3[condicion_fuera_rango]['Código'] + "_" + df_f3[condicion_fuera_rango]['Grupo'].astype(str)
+    
+    df_f4 = df_f3[~claves_asignaturas.isin(claves_fuera.unique())].copy()
 
     ocultar_compartidas = st.sidebar.checkbox("👁️ **Ocultar asignaturas compartidas** (ya empezadas)")
     if ocultar_compartidas:
@@ -280,7 +286,6 @@ else:
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
     
-    # Declaramos el DataFrame vacío por defecto
     df_seleccion = pd.DataFrame()
     horas_asumidas_dict = {}
     alertas_normativa = []
@@ -429,7 +434,7 @@ else:
                 if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
             
             if H_T in [70, 90] and h_T > 60:
-                err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
+                err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de {H_T} horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                 alertas_normativa.append(err_msg)
             else:
                 if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
@@ -528,7 +533,7 @@ else:
 
             # --- 2. SOLAPAMIENTOS Y DESPLAZAMIENTOS ---
             st.markdown("### 🏃‍♂️ Cruces y Desplazamientos")
-            conflictos, alertas_desplazamiento = [], []
+            conflictos_lista, alertas_desplazamiento = [], []
             df_sel_ord = df_seleccion.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
             
             def min_entre_horas(h1, h2):
@@ -546,15 +551,15 @@ else:
                             un_id2 = f"[{clases[j]['Código']}] {clases[j]['Asignatura']} ({clases[j]['Grupo']})"
                             
                             if inicio1 < fin2 and inicio2 < fin1:
-                                conflictos.append(f"**{fecha}:** {un_id1} ({inicio1}-{fin1}) choca con {un_id2} ({inicio2}-{fin2})")
+                                conflictos_lista.append(f"**{fecha}:** {un_id1} ({inicio1}-{fin1}) choca con {un_id2} ({inicio2}-{fin2})")
                             elif campus1 != campus2:
                                 gap = min_entre_horas(fin1, inicio2)
                                 if 0 <= gap < 60:
                                     alertas_desplazamiento.append(f"**{fecha}:** Margen crítico ({gap} min) de {campus1} ({un_id1}, fin {fin1}) ➔ {campus2} ({un_id2}, inicio {inicio2})")
 
-            if conflictos:
+            if conflictos_lista:
                 st.error("⚠️ Solapamientos horarios estrictos detectados:")
-                for c in conflictos: st.write(f"- {c}")
+                for c in conflictos_lista: st.write(f"- {c}")
             else:
                 st.success("✅ No hay solapamientos de horario estrictos en el calendario.")
                 
@@ -568,8 +573,8 @@ else:
 
     with tab4:
         st.subheader("Buscador y Revisión de Horarios de Compañeros")
-        lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
-        prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores)
+        lista_profesores_total = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
+        prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores_total)
         
         if prof_buscado != "-- Seleccionar --":
             df_prof = df_eventos[df_eventos['Profesor_Original'] == prof_buscado].copy()

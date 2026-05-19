@@ -33,6 +33,7 @@ def buscar_fuerza_profesor(nombre_pod, df_fuerza):
     if df_fuerza.empty or 'Nombre' not in df_fuerza.columns: return None
     nombre_pod_clean = simplificar_nombre(nombre_pod)
     partes_pod = nombre_pod_clean.replace(',', ' ').split()
+    
     for idx, row in df_fuerza.iterrows():
         nombre_f_clean = simplificar_nombre(row['Nombre'])
         if all(p in nombre_f_clean for p in partes_pod):
@@ -153,7 +154,6 @@ if st.sidebar.button("🔄 Actualizar Datos del Excel", use_container_width=True
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
 else:
-    # Calcular profesores activos para 2ª vuelta (a los que les faltan > 9 horas)
     df_unicos_prof_calc = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
     horas_por_prof_calc = df_unicos_prof_calc[df_unicos_prof_calc['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
     
@@ -238,7 +238,6 @@ else:
     
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones]
     
-    # Análisis de ocupación y solapamientos en tiempo real
     busy_dict = {}
     conflictos_exist = False
     
@@ -280,6 +279,11 @@ else:
     asignaturas_elegidas = st.sidebar.multiselect("Elige tus grupos:", lista_opciones, key='seleccion_asignaturas')
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
+    
+    # Declaramos el DataFrame vacío por defecto
+    df_seleccion = pd.DataFrame()
+    horas_asumidas_dict = {}
+    alertas_normativa = []
 
     if asignaturas_elegidas:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
@@ -288,7 +292,6 @@ else:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Ajuste de Horas a Impartir")
         
-        horas_asumidas_dict = {}
         for _, r in df_unicos.iterrows():
             max_h_disp = int(r['Horas_Disponibles'])
             clave_id = f"{r['Código']}_{r['Grupo']}"
@@ -350,11 +353,93 @@ else:
                         st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
                         st.sidebar.button("➕ Añadir a mi POD", key=f"btn_t3_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
                         st.sidebar.markdown("---")
+                    if top_10:
+                        with st.sidebar.expander("Ver más sugerencias (Top 10)"):
+                            for rec in top_10:
+                                st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
+                                st.button("➕ Añadir a mi POD", key=f"btn_t10_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
+                                st.markdown("---")
         else:
             st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
     else:
-        df_seleccion = pd.DataFrame()
         st.sidebar.info("👈 Selecciona asignaturas en el menú lateral.")
+
+    # --- CÁLCULO DE NORMATIVA PARA ALERTAS GLOBALES ---
+    if not df_seleccion.empty:
+        familias_evaluadas = {}
+        for _, r in df_unicos.iterrows():
+            codigo = r['Código']
+            grupo_str = str(r['Grupo']).strip()
+            h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
+            
+            if h_asum > 0:
+                madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
+                clave_familia = f"{codigo}_{madre_calc}"
+                if clave_familia not in familias_evaluadas:
+                    familias_evaluadas[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
+
+        def get_max_h(codigo, grupo):
+            match = df_eventos[(df_eventos['Código'] == codigo) & (df_eventos['Grupo'].astype(str).str.strip() == grupo)]
+            if not match.empty: return int(match['Horas_Totales'].iloc[0])
+            return 0
+            
+        def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
+        def is_full(h, H): return H > 0 and h == H
+
+        for clave, info in familias_evaluadas.items():
+            codigo = info['codigo']
+            madre = info['madre']
+            nombre_asig = info['asignatura']
+            
+            df_asig_full = df_eventos[df_eventos['Código'] == codigo]
+            desdobles_disp = []
+            for _, r_disp in df_asig_full.drop_duplicates(subset=['Grupo']).iterrows():
+                g_disp = str(r_disp['Grupo']).strip()
+                if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
+                    desdobles_disp.append(g_disp)
+            
+            H_T = get_max_h(codigo, madre)
+            h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
+            
+            P_data = []
+            for p in desdobles_disp:
+                Hp = get_max_h(codigo, p)
+                hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
+                if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
+            
+            num_prac_full = sum(1 for _, hp, Hp in P_data if is_full(hp, Hp))
+            num_prac_cero = sum(1 for _, hp, Hp in P_data if hp == 0)
+            
+            todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+            mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+            cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+            
+            es_todo = is_full(h_T, H_T) and todo_practicas
+            es_mitad = is_half(h_T, H_T) and mitad_practicas
+            
+            teoria_y_un_desdoble = False
+            if is_full(h_T, H_T) and len(P_data) > 0:
+                if num_prac_full == 1 and num_prac_cero == len(P_data) - 1:
+                    teoria_y_un_desdoble = True
+
+            es_teoria_oculta = False
+            es_resto_teoria_oculta = False
+            if H_T in [70, 90]:
+                if h_T == 60 and cero_practicas: es_teoria_oculta = True
+                if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
+            
+            if H_T in [70, 90] and h_T > 60:
+                err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
+                alertas_normativa.append(err_msg)
+            else:
+                if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
+                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
+                    detalles = []
+                    if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
+                    else: detalles.append(f"Teoría ({madre}): No disponible")
+                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                    err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 ÚNICO Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles.*"
+                    alertas_normativa.append(err_msg)
 
     mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_eventos['Código'].unique())}
 
@@ -368,8 +453,10 @@ else:
     
     with tab1:
         if conflictos_exist:
-            st.error("⚠️ **¡Atención!** Se han detectado solapamientos en tu selección. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
-            
+            st.error("⚠️ **¡Atención!** Se han detectado solapamientos de horario en tu selección. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+        if alertas_normativa:
+            st.error("⚠️ **¡Atención!** Tu selección actual no cumple la normativa de 1ª vuelta. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+
         if not df_seleccion.empty:
             for semestre in sorted(df_seleccion['Semestre'].astype(str).unique()):
                 st.markdown(f"#### 📅 {semestre.upper()}")
@@ -431,83 +518,6 @@ else:
             
             # --- 1. AUDITORÍA DE NORMATIVA (1ª VUELTA) ---
             st.markdown("### 📜 Cumplimiento de Normativa (1ª Vuelta)")
-            alertas_normativa = []
-            
-            familias_evaluadas = {}
-            for _, r in df_unicos.iterrows():
-                codigo = r['Código']
-                grupo_str = str(r['Grupo']).strip()
-                h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
-                
-                if h_asum > 0:
-                    madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
-                    clave_familia = f"{codigo}_{madre_calc}"
-                    if clave_familia not in familias_evaluadas:
-                        familias_evaluadas[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
-
-            def get_max_h(codigo, grupo):
-                match = df_eventos[(df_eventos['Código'] == codigo) & (df_eventos['Grupo'].astype(str).str.strip() == grupo)]
-                if not match.empty: return int(match['Horas_Totales'].iloc[0])
-                return 0
-                
-            def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
-            def is_full(h, H): return H > 0 and h == H
-
-            for clave, info in familias_evaluadas.items():
-                codigo = info['codigo']
-                madre = info['madre']
-                nombre_asig = info['asignatura']
-                
-                df_asig_full = df_eventos[df_eventos['Código'] == codigo]
-                desdobles_disp = []
-                for _, r_disp in df_asig_full.drop_duplicates(subset=['Grupo']).iterrows():
-                    g_disp = str(r_disp['Grupo']).strip()
-                    if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
-                        desdobles_disp.append(g_disp)
-                
-                H_T = get_max_h(codigo, madre)
-                h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
-                
-                P_data = []
-                for p in desdobles_disp:
-                    Hp = get_max_h(codigo, p)
-                    hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
-                    if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
-                
-                num_prac_full = sum(1 for _, hp, Hp in P_data if is_full(hp, Hp))
-                num_prac_cero = sum(1 for _, hp, Hp in P_data if hp == 0)
-                
-                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
-                
-                es_todo = is_full(h_T, H_T) and todo_practicas
-                es_mitad = is_half(h_T, H_T) and mitad_practicas
-                
-                teoria_y_un_desdoble = False
-                if is_full(h_T, H_T) and len(P_data) > 0:
-                    if num_prac_full == 1 and num_prac_cero == len(P_data) - 1:
-                        teoria_y_un_desdoble = True
-
-                es_teoria_oculta = False
-                es_resto_teoria_oculta = False
-                if H_T in [70, 90]:
-                    if h_T == 60 and cero_practicas: es_teoria_oculta = True
-                    if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
-                
-                if H_T in [70, 90] and h_T > 60:
-                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
-                    alertas_normativa.append(err_msg)
-                else:
-                    if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
-                        err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
-                        detalles = []
-                        if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
-                        else: detalles.append(f"Teoría ({madre}): No disponible")
-                        for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 ÚNICO Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles.*"
-                        alertas_normativa.append(err_msg)
-            
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")
@@ -557,7 +567,7 @@ else:
             st.info("Sin asignaturas seleccionadas.")
 
     with tab4:
-        st.subheader("Revisión y Cumplimiento de la Normativa")
+        st.subheader("Buscador y Revisión de Horarios de Compañeros")
         lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
         prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores)
         
@@ -602,7 +612,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Revisión de Normativa")
+            st.markdown("#### 📜 Cumplimiento de la Normativa del Compañero")
             alertas_normativa_prof = []
             
             familias_prof = {}
@@ -685,7 +695,7 @@ else:
                 st.warning("⚠️ **Posibles incumplimientos de normativa en el POD de este docente:**")
                 for alerta in alertas_normativa_prof: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta.")
+                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta y límites de 60h.")
             
             st.markdown("---")
             

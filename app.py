@@ -5,7 +5,10 @@ import unicodedata
 
 st.set_page_config(layout="wide", page_title="Planificador POD")
 st.title("Planificador Docente - Análisis de Compatibilidad y Ocupación")
-
+# Botón para forzar la recarga del Excel
+if st.sidebar.button("🔄 Actualizar Datos"):
+    st.cache_data.clear()
+    st.rerun()
 # --- FUNCIONES AUXILIARES Y ESTADO ---
 if 'seleccion_asignaturas' not in st.session_state:
     st.session_state['seleccion_asignaturas'] = []

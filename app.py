@@ -416,7 +416,8 @@ else:
         
         if prof_buscado != "-- Seleccionar --":
             df_prof = df_eventos[df_eventos['Profesor_Original'] == prof_buscado].copy()
-            horas_prof = df_prof.drop_duplicates(subset=['Código', 'Grupo'])['Horas_Profesor'].sum()
+            df_prof_unicos = df_prof.drop_duplicates(subset=['Código', 'Grupo'])
+            horas_prof = df_prof_unicos['Horas_Profesor'].sum()
             
             st.markdown("---")
             info_fuerza = buscar_fuerza_profesor(prof_buscado, df_fuerza)
@@ -440,8 +441,82 @@ else:
                     if horas_prof < 240: st.warning(f"💡 **Fuerza teórica (240h).** Le faltarían {240 - horas_prof}h para completar.")
                     else: st.success("✅ **POD aparentemente completo (>240h).**")
             
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- NUEVO: AUDITORÍA DE NORMATIVA DEL COMPAÑERO ---
+            st.markdown("#### 📜 Auditoría de Normativa de Compañero")
+            alertas_normativa_prof = []
+            
+            familias_prof = {}
+            for _, r in df_prof_unicos.iterrows():
+                codigo = r['Código']
+                grupo_str = str(r['Grupo']).strip()
+                h_prof = int(r['Horas_Profesor'])
+                
+                if h_prof > 0:
+                    madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
+                    clave_familia = f"{codigo}_{madre_calc}"
+                    if clave_familia not in familias_prof:
+                        familias_prof[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
+
+            def get_max_h_ev(codigo, grupo):
+                match = df_eventos[(df_eventos['Código'] == codigo) & (df_eventos['Grupo'].astype(str).str.strip() == grupo)]
+                if not match.empty: return int(match['Horas_Totales'].iloc[0])
+                return 0
+                
+            def get_h_prof(codigo, grupo):
+                match = df_prof_unicos[(df_prof_unicos['Código'] == codigo) & (df_prof_unicos['Grupo'].astype(str).str.strip() == grupo)]
+                if not match.empty: return int(match['Horas_Profesor'].iloc[0])
+                return 0
+
+            def is_half_p(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
+            def is_full_p(h, H): return H > 0 and h == H
+
+            for clave, info in familias_prof.items():
+                codigo, madre, nombre_asig = info['codigo'], info['madre'], info['asignatura']
+                df_asig_ev = df_eventos[df_eventos['Código'] == codigo]
+                
+                desdobles_disp = []
+                for _, r_disp in df_asig_ev.drop_duplicates(subset=['Grupo']).iterrows():
+                    g_disp = str(r_disp['Grupo']).strip()
+                    if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
+                        desdobles_disp.append(g_disp)
+                        
+                H_T = get_max_h_ev(codigo, madre)
+                h_T = get_h_prof(codigo, madre)
+                
+                P_data = []
+                for p in desdobles_disp:
+                    Hp = get_max_h_ev(codigo, p)
+                    hp = get_h_prof(codigo, p)
+                    if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
+                        
+                todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+                
+                es_todo = is_full_p(h_T, H_T) and todo_prac
+                solo_teoria = is_full_p(h_T, H_T) and cero_prac
+                es_mitad = is_half_p(h_T, H_T) and mitad_prac
+                
+                if not (es_todo or solo_teoria or es_mitad):
+                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: "
+                    detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
+                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                    err_msg += " | ".join(detalles)
+                    alertas_normativa_prof.append(err_msg)
+            
+            if alertas_normativa_prof:
+                st.warning("⚠️ **Posibles incumplimientos de normativa en el POD de este docente:**")
+                for alerta in alertas_normativa_prof: st.write(f"- {alerta}")
+            else:
+                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta.")
+            
+            st.markdown("---")
+            
+            st.markdown("#### 📅 Cuadrante Semanal del Compañero")
             for semestre in sorted(df_prof['Semestre'].astype(str).unique()):
-                st.markdown(f"##### 📅 {semestre.upper()}")
+                st.markdown(f"##### {semestre.upper()}")
                 df_sem_prof = df_prof[df_prof['Semestre'] == semestre].copy()
                 df_sem_prof['Franja Horaria'] = df_sem_prof['Hora Inicio'] + " - " + df_sem_prof['Hora Fin']
                 

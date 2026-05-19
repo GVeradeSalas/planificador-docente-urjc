@@ -677,7 +677,7 @@ else:
                         profs_procesados.add(nom_pod)
                         
                 pct = min(h_asig / fuerza, 1.0) if fuerza > 0 else 0.0
-                is_finished = pct >= 1.0 or (fuerza - h_asig) <= 8
+                is_finished = pct >= 1.0 or (fuerza - h_asig) <= 9
                 
                 datos_profs.append({
                     'Original_Index': row_f['Index_Orig'],

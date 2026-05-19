@@ -62,9 +62,6 @@ def cargar_y_procesar(ruta_archivo):
     patron_con_fechas = r'([LMXJVSD])=>\((.*?)-(.*?)\)\[(.*?)\]'
     patron_fijo = r'([LMXJVSD])(?:=>)?\s*\(\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*\)(?!\[)'
     
-    # NUEVO PATRÓN: Atrapa el nombre y el primer número dentro del paréntesis ignorando /48 o "h"
-    patron_profesor = r'([^\(]+)\s*\(\s*(\d+)[^\)]*\)'
-    
     for index, row in df_crudo.dropna(subset=['Horario']).iterrows():
         horario_str = str(row['Horario']).strip()
         if horario_str.lower() in ['solo examen', 'no', 'nan', '']: continue
@@ -73,29 +70,58 @@ def cargar_y_procesar(ruta_archivo):
         horas_totales = pd.to_numeric(row.get('Horas', 0), errors='coerce')
         if pd.isna(horas_totales): horas_totales = 0
             
-        txt_prof = str(row.get('Profesores', '')).strip()
-        if txt_prof == '' or txt_prof.lower() in ['no', 'nan']:
-            profesor_asignado, horas_profesor, horas_disponibles, estado_ocupacion = "Ninguno", 0, horas_totales, "Libre al completo"
+        celda_prof = str(row.get('Profesores', '')).strip()
+        
+        # --- NUEVA LÓGICA DE EXTRACCIÓN MÚLTIPLE DE PROFESORES ---
+        if celda_prof == '' or celda_prof.lower() in ['no', 'nan']:
+            lista_profs = [("Ninguno", 0)]
+            horas_disponibles = horas_totales
+            estado_ocupacion = "Libre al completo"
         else:
-            match_prof = re.search(patron_profesor, txt_prof)
-            if match_prof:
-                profesor_asignado = match_prof.group(1).strip()
-                horas_profesor = int(match_prof.group(2))
-                horas_disponibles = max(0, horas_totales - horas_profesor)
-                estado_ocupacion = f"Ocupada por {profesor_asignado}" if horas_disponibles == 0 else f"Compartida con {profesor_asignado} (Quedan {horas_disponibles}h)"
+            lista_profs = []
+            horas_ocupadas = 0
+            nombres_desc = []
+            
+            # Separamos por coma o por " y "
+            segmentos = re.split(r',|\by\b', celda_prof, flags=re.IGNORECASE)
+            for seg in segmentos:
+                if not seg.strip(): continue
+                # Busca el nombre y su número (ignorando /48, /24, h...)
+                match = re.search(r'([^\(]+)\s*\(\s*(\d+)[^\)]*\)', seg)
+                if match:
+                    nom = match.group(1).strip()
+                    h = int(match.group(2))
+                    lista_profs.append((nom, h))
+                    horas_ocupadas += h
+                    nombres_desc.append(f"{nom} ({h}h)")
+                else:
+                    nom = seg.strip()
+                    lista_profs.append((nom, horas_totales))
+                    horas_ocupadas += horas_totales
+                    nombres_desc.append(nom)
+                    
+            horas_disponibles = max(0, horas_totales - horas_ocupadas)
+            if not lista_profs:
+                lista_profs = [("Ninguno", 0)]
+                estado_ocupacion = "Libre al completo"
+            elif horas_disponibles == 0:
+                estado_ocupacion = f"Ocupada por {', '.join(nombres_desc)}"
             else:
-                profesor_asignado, horas_profesor, horas_disponibles, estado_ocupacion = txt_prof, horas_totales, 0, f"Ocupada por {txt_prof}"
+                estado_ocupacion = f"Compartida con {', '.join(nombres_desc)} (Quedan {horas_disponibles}h)"
 
         semestre_actual = row.get('Semestre', 'Desconocido')
-        for match in re.findall(patron_con_fechas, horario_str):
-            dia, hora_inicio, hora_fin, fechas_str = match
-            for fecha in [f.strip() for f in fechas_str.split(',')]:
-                eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': horas_profesor, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': profesor_asignado, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+        
+        # Guardar eventos CLONADOS para cada profesor que comparta la asignatura
+        for prof_nombre, prof_horas in lista_profs:
+            for match in re.findall(patron_con_fechas, horario_str):
+                dia, hora_inicio, hora_fin, fechas_str = match
+                for fecha in [f.strip() for f in fechas_str.split(',')]:
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
 
-        for match in re.findall(patron_fijo, horario_str):
-            dia, hora_inicio, hora_fin = match
-            for fecha in generar_fechas_fijas(dia, semestre_actual):
-                eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': horas_profesor, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': profesor_asignado, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+            for match in re.findall(patron_fijo, horario_str):
+                dia, hora_inicio, hora_fin = match
+                for fecha in generar_fechas_fijas(dia, semestre_actual):
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
                 
     df_eventos = pd.DataFrame(eventos)
     if not df_eventos.empty: df_eventos['Fecha_Obj'] = pd.to_datetime(df_eventos['Fecha_str'], format='%d/%m/%y', errors='coerce')
@@ -138,6 +164,7 @@ else:
 
     if asignaturas_elegidas:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
+        # Aseguramos unificar la vista para ti (sin duplicados por profesor)
         df_unicos = df_seleccion.drop_duplicates(subset=['Código', 'Grupo'])
         
         st.sidebar.markdown("---")
@@ -162,9 +189,9 @@ else:
 
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
-            
             st.sidebar.markdown("---")
             st.sidebar.subheader("💡 Sugerencias Inteligentes")
+            
             grupos_sel = df_seleccion['Asig_Grupo'].unique()
             campus_sel = df_seleccion['Campus'].unique()
             nombres_sel = df_seleccion['Asignatura'].unique()
@@ -191,7 +218,6 @@ else:
                                 tiene_solape = True
                                 break
                     if tiene_solape: break
-                
                 if tiene_solape: continue
                 
                 score = 0
@@ -276,7 +302,7 @@ else:
                 html += f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>"
                 for dia in dias_activos:
                     html += "<td>"
-                    for _, r in df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].sort_values('Hora Inicio').iterrows():
+                    for _, r in df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo', 'Hora Inicio']).sort_values('Hora Inicio').iterrows():
                         html += f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>"
                     html += "</td>"
                 html += "</tr>"
@@ -301,7 +327,6 @@ else:
                 if h_asum > 0:
                     madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
                     clave_familia = f"{codigo}_{madre_calc}"
-                    
                     if clave_familia not in familias_evaluadas:
                         familias_evaluadas[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
 
@@ -319,7 +344,6 @@ else:
                 nombre_asig = info['asignatura']
                 
                 df_asig = df_disponibles[df_disponibles['Código'] == codigo]
-                
                 desdobles_disponibles = []
                 for _, r_disp in df_asig.drop_duplicates(subset=['Grupo']).iterrows():
                     g_disp = str(r_disp['Grupo']).strip()
@@ -333,8 +357,7 @@ else:
                 for p in desdobles_disponibles:
                     Hp = get_max_h(codigo, p)
                     hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
-                    if Hp > 0 or hp > 0:
-                        P_data.append((p, hp, Hp))
+                    if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
                 
                 todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
                 mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
@@ -347,13 +370,9 @@ else:
                 if not (es_todo or solo_teoria or es_mitad):
                     err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
                     detalles = []
-                    
                     if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
                     else: detalles.append(f"Teoría ({madre}): No disponible")
-                    
-                    for gp, hp, Hp in P_data:
-                        detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                        
+                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
                     err_msg += " | ".join(detalles) + ". *Opciones válidas: Coger TODO el paquete, sólo la Teoría completa, o exactamente la MITAD de Teoría + MITAD de todas sus Prácticas.*"
                     alertas_normativa.append(err_msg)
             
@@ -361,14 +380,14 @@ else:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones (familias de teoría y desdobles) cumplen con la normativa.")
+                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones cumplen con la normativa.")
 
             st.markdown("---")
 
             # --- 2. SOLAPAMIENTOS Y DESPLAZAMIENTOS ---
             st.markdown("### 🏃‍♂️ Cruces y Desplazamientos")
             conflictos, alertas_desplazamiento = [], []
-            df_sel_ord = df_seleccion.sort_values(by=['Fecha_Obj', 'Hora Inicio'])
+            df_sel_ord = df_seleccion.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
             
             def min_entre_horas(h1, h2):
                 try: return (int(h2.split(':')[0])*60 + int(h2.split(':')[1])) - (int(h1.split(':')[0])*60 + int(h1.split(':')[1]))

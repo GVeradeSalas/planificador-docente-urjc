@@ -14,6 +14,8 @@ if 'prof_cargado' not in st.session_state:
     st.session_state['prof_cargado'] = "-- Ninguno --"
 if 'horas_precargadas' not in st.session_state:
     st.session_state['horas_precargadas'] = {}
+if 'fuerza_objetivo' not in st.session_state:
+    st.session_state['fuerza_objetivo'] = 240
 
 def agregar_asignatura(asig_grupo):
     if asig_grupo not in st.session_state['seleccion_asignaturas']:
@@ -31,7 +33,6 @@ def buscar_fuerza_profesor(nombre_pod, df_fuerza):
     if df_fuerza.empty or 'Nombre' not in df_fuerza.columns: return None
     nombre_pod_clean = simplificar_nombre(nombre_pod)
     partes_pod = nombre_pod_clean.replace(',', ' ').split()
-    
     for idx, row in df_fuerza.iterrows():
         nombre_f_clean = simplificar_nombre(row['Nombre'])
         if all(p in nombre_f_clean for p in partes_pod):
@@ -43,12 +44,10 @@ def generar_fechas_fijas(dia_letra, semestre_str):
     mapa_dias = {'L': 0, 'M': 1, 'X': 2, 'J': 3, 'V': 4, 'S': 5, 'D': 6}
     num_dia = mapa_dias.get(dia_letra.strip().upper())
     if num_dia is None: return []
-    
     semestre_clean = str(semestre_str).upper()
     if "PRIMER" in semestre_clean: start_date, end_date = "2026-09-10", "2026-12-22"
     elif "SEGUNDO" in semestre_clean: start_date, end_date = "2027-01-27", "2027-05-11"
     else: return [] 
-        
     fechas = pd.date_range(start=start_date, end=end_date, freq='D')
     return [f.strftime('%d/%m/%y') for f in fechas[fechas.weekday == num_dia]]
 
@@ -90,7 +89,6 @@ def cargar_y_procesar(ruta_archivo):
             lista_profs = []
             horas_ocupadas = 0
             nombres_desc = []
-            
             segmentos = re.split(r',|\by\b', celda_prof, flags=re.IGNORECASE)
             for seg in segmentos:
                 if not seg.strip(): continue
@@ -117,19 +115,20 @@ def cargar_y_procesar(ruta_archivo):
                 estado_ocupacion = f"Compartida con {', '.join(nombres_desc)} (Quedan {horas_disponibles}h)"
 
         semestre_actual = row.get('Semestre', 'Desconocido')
+        titulacion_actual = row.get('Titulación', 'Desconocido')
         
         for prof_nombre, prof_horas in lista_profs:
             for match in re.findall(patron_con_fechas, horario_str):
                 dia, hora_inicio, hora_fin, fechas_str = match
                 turno = parse_turno(hora_inicio.strip())
                 for fecha in [f.strip() for f in fechas_str.split(',')]:
-                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': titulacion_actual, 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
 
             for match in re.findall(patron_fijo, horario_str):
                 dia, hora_inicio, hora_fin = match
                 turno = parse_turno(hora_inicio.strip())
                 for fecha in generar_fechas_fijas(dia, semestre_actual):
-                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': titulacion_actual, 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
                 
     df_eventos = pd.DataFrame(eventos)
     if not df_eventos.empty: df_eventos['Fecha_Obj'] = pd.to_datetime(df_eventos['Fecha_str'], format='%d/%m/%y', errors='coerce')
@@ -140,32 +139,65 @@ df_eventos = cargar_y_procesar("POD_2026-27_11-5-2026.xlsx")
 df_fuerza = cargar_fuerza_docente("Fuerza Docente.xlsx")
 
 # --- BARRA LATERAL ---
-if st.sidebar.button("🔄 Actualizar Datos del Excel"):
+st.sidebar.markdown(
+    """
+    <style>
+    .big-font {font-size:1.1em !important; font-weight: bold;}
+    </style>
+    """, unsafe_allow_html=True)
+
+if st.sidebar.button("🔄 Actualizar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
 else:
-    lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
+    # Calcular profesores activos para 2ª vuelta (a los que les faltan > 9 horas)
+    df_unicos_prof_calc = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
+    horas_por_prof_calc = df_unicos_prof_calc[df_unicos_prof_calc['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
     
-    st.sidebar.header("0. 🧑‍🏫 Cargar Perfil (2ª Vuelta)")
-    idx_prof = lista_profesores.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores else 0
-    prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil para cargar tus horas:", ["-- Ninguno --"] + lista_profesores, index=idx_prof)
+    lista_profesores_activos = []
+    for p in df_eventos['Profesor_Original'].unique():
+        if p == "Ninguno": continue
+        info_f = buscar_fuerza_profesor(p, df_fuerza)
+        f_real = 240
+        if info_f is not None:
+            f_real = pd.to_numeric(info_f.get('Fuerza', 240), errors='coerce')
+            f_real = 240 if pd.isna(f_real) or f_real <= 0 else f_real
+        h_asig = horas_por_prof_calc.get(p, 0)
+        if (f_real - h_asig) > 9:
+            lista_profesores_activos.append(p)
+    lista_profesores_activos.sort()
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<p class='big-font'>0. 🧑‍🏫 Cargar Perfil (2ª Vuelta)</p>", unsafe_allow_html=True)
+    st.sidebar.caption("Solo se muestran docentes activos (con más de 9h pendientes).")
+    
+    idx_prof = lista_profesores_activos.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores_activos else 0
+    prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil:", ["-- Ninguno --"] + lista_profesores_activos, index=idx_prof)
     
     if prof_a_cargar != st.session_state['prof_cargado']:
         st.session_state['prof_cargado'] = prof_a_cargar
         if prof_a_cargar != "-- Ninguno --":
             df_prof_load = df_eventos[df_eventos['Profesor_Original'] == prof_a_cargar].drop_duplicates(subset=['Código', 'Grupo'])
-            df_prof_load['Asig_Grupo'] = "[" + df_prof_load['Código'] + "] " + df_prof_load['Asignatura'] + " (" + df_prof_load['Grupo'].astype(str) + ") | " + df_prof_load['Estado_Ocupacion']
+            df_prof_load['Asig_Grupo'] = "[" + df_prof_load['Código'] + "] " + df_prof_load['Asignatura'] + " (" + df_prof_load['Grupo'].astype(str) + ") - " + df_prof_load['Titulación'] + " | " + df_prof_load['Estado_Ocupacion']
             st.session_state['seleccion_asignaturas'] = df_prof_load['Asig_Grupo'].tolist()
             st.session_state['horas_precargadas'] = {f"{r['Código']}_{r['Grupo']}": int(r['Horas_Profesor']) for _, r in df_prof_load.iterrows()}
+            
+            info_fuerza_cargado = buscar_fuerza_profesor(prof_a_cargar, df_fuerza)
+            if info_fuerza_cargado is not None:
+                st.session_state['fuerza_objetivo'] = pd.to_numeric(info_fuerza_cargado.get('Fuerza', 240), errors='coerce')
+            else:
+                st.session_state['fuerza_objetivo'] = 240
         else:
             st.session_state['seleccion_asignaturas'] = []
             st.session_state['horas_precargadas'] = {}
+            st.session_state['fuerza_objetivo'] = 240
         st.rerun()
 
-    st.sidebar.header("1. 🎯 Filtros Principales")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<p class='big-font'>1. 🎯 Filtros Principales</p>", unsafe_allow_html=True)
     lista_campus = list(df_eventos['Campus'].dropna().unique())
     campus_elegidos = st.sidebar.multiselect("Campus:", lista_campus, default=['MOSTOLES'] if 'MOSTOLES' in lista_campus else [])
     df_f1 = df_eventos[df_eventos['Campus'].isin(campus_elegidos)] if campus_elegidos else df_eventos
@@ -176,40 +208,76 @@ else:
     titulaciones_elegidas = st.sidebar.multiselect("Titulaciones:", sorted(list(df_f2['Titulación'].dropna().unique())))
     df_f3 = df_f2[df_f2['Titulación'].isin(titulaciones_elegidas)] if titulaciones_elegidas else df_f2
 
-    # --- NUEVO FILTRO: DESLIZADOR DE HORAS ---
-    st.sidebar.header("2. ⏱️ Filtros y Disponibilidad")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<p class='big-font'>2. ⏱️ Filtros y Disponibilidad</p>", unsafe_allow_html=True)
     min_t, max_t = datetime.time(8, 0), datetime.time(22, 0)
-    rango_horas = st.sidebar.slider(
-        "Rango horario de clases:",
-        min_value=min_t, max_value=max_t,
-        value=(min_t, max_t),
-        format="HH:mm"
-    )
+    rango_horas = st.sidebar.slider("Rango horario de clases:", min_value=min_t, max_value=max_t, value=(min_t, max_t), format="HH:mm")
     start_str = rango_horas[0].strftime("%H:%M")
     end_str = rango_horas[1].strftime("%H:%M")
-    
-    # Filtramos para que la clase esté completamente dentro del rango
     df_f4 = df_f3[(df_f3['Hora Inicio'] >= start_str) & (df_f3['Hora Fin'] <= end_str)]
 
-    ocultar_compartidas = st.sidebar.checkbox("Ocultar asignaturas compartidas (ya empezadas)")
+    ocultar_compartidas = st.sidebar.checkbox("👁️ **Ocultar asignaturas compartidas** (ya empezadas)")
     if ocultar_compartidas:
         df_f4 = df_f4[(df_f4['Profesor_Original'] == 'Ninguno') | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])]
 
-    st.sidebar.header("3. 🚫 Excluir Asignaturas")
     asignaturas_nombres = sorted(list(df_f4['Asignatura'].dropna().unique()))
-    evitar_asig = st.sidebar.multiselect("Selecciona nombres a evitar:", asignaturas_nombres)
+    evitar_asig = st.sidebar.multiselect("🚫 Excluir nombres específicos:", asignaturas_nombres)
     if evitar_asig:
         df_f4 = df_f4[~df_f4['Asignatura'].isin(evitar_asig)]
 
-    st.sidebar.header("4. 📋 Seleccionar Asignaturas")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<p class='big-font'>3. 📋 Selección de Asignaturas</p>", unsafe_allow_html=True)
+    
+    strict_mode = st.sidebar.checkbox("🔒 **Modo Estricto:** Ocultar incompatibles", help="Oculta del desplegable las asignaturas que se solapan con tu elección actual.")
+
     mask_disp = (df_f4['Horas_Disponibles'] > 0) | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])
     df_disponibles = df_f4[mask_disp].copy()
     
-    df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
+    df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") - " + df_disponibles['Titulación'] + " | " + df_disponibles['Estado_Ocupacion']
     lista_opciones = sorted(list(df_disponibles.drop_duplicates(subset=['Código', 'Grupo'])['Asig_Grupo'].dropna().unique()))
     
-    st.session_state['seleccion_asignaturas'] = [x for x in st.session_state['seleccion_asignaturas'] if x in lista_opciones]
-    asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos:", lista_opciones, key='seleccion_asignaturas')
+    sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones]
+    
+    # Análisis de ocupación y solapamientos en tiempo real
+    busy_dict = {}
+    conflictos_exist = False
+    
+    if sel_actual:
+        df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo'].isin(sel_actual)]
+        for _, r in df_sel_temp.iterrows():
+            f = r['Fecha_str']
+            hi, hf = r['Hora Inicio'], r['Hora Fin']
+            if f not in busy_dict: busy_dict[f] = []
+            for b_hi, b_hf in busy_dict[f]:
+                if hi < b_hf and b_hi < hf: conflictos_exist = True
+            busy_dict[f].append((hi, hf))
+            
+    if strict_mode:
+        if conflictos_exist:
+            st.session_state['seleccion_asignaturas'] = []
+            st.sidebar.warning("⚠️ Modo estricto activado: Se ha reiniciado la elección porque existían solapamientos.")
+            st.rerun()
+        else:
+            valid_options = []
+            for ag, grp_df in df_disponibles.groupby('Asig_Grupo'):
+                if ag in sel_actual:
+                    valid_options.append(ag)
+                    continue
+                overlap = False
+                for _, r in grp_df.iterrows():
+                    f = r['Fecha_str']
+                    hi, hf = r['Hora Inicio'], r['Hora Fin']
+                    if f in busy_dict:
+                        for b_hi, b_hf in busy_dict[f]:
+                            if hi < b_hf and b_hi < hf:
+                                overlap = True
+                                break
+                    if overlap: break
+                if not overlap: valid_options.append(ag)
+            lista_opciones = [x for x in lista_opciones if x in valid_options]
+
+    st.session_state['seleccion_asignaturas'] = sel_actual
+    asignaturas_elegidas = st.sidebar.multiselect("Elige tus grupos:", lista_opciones, key='seleccion_asignaturas')
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
 
@@ -225,17 +293,19 @@ else:
             max_h_disp = int(r['Horas_Disponibles'])
             clave_id = f"{r['Código']}_{r['Grupo']}"
             h_actual = st.session_state.get('horas_precargadas', {}).get(clave_id, 0)
-            
             max_slider = max_h_disp + h_actual
             default_val = h_actual if h_actual > 0 else max_slider
-            
             horas_asumidas_dict[clave_id] = st.sidebar.slider(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})", 0, max_slider, default_val, 1, key=f"sl_{clave_id}")
             
         horas_totales_asumidas = sum(horas_asumidas_dict.values())
         
         st.sidebar.markdown("---")
         st.sidebar.subheader("Progreso Docente (POD)")
-        objetivo_horas = st.sidebar.number_input("🎯 Tu objetivo de horas:", 1, 240, 240, 10)
+        
+        fuerza_default = st.session_state.get('fuerza_objetivo', 240)
+        if pd.isna(fuerza_default): fuerza_default = 240
+        objetivo_horas = st.sidebar.number_input("🎯 Tu objetivo de horas:", 1, 300, int(fuerza_default), 10)
+        
         progreso = min(horas_totales_asumidas / objetivo_horas, 1.0)
         st.sidebar.progress(progreso)
         st.sidebar.metric(label="⏱️ Horas Docentes Asumidas", value=f"{horas_totales_asumidas} h")
@@ -244,61 +314,42 @@ else:
 
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("💡 Sugerencias Inteligentes")
-            
-            grupos_sel = df_seleccion['Asig_Grupo'].unique()
-            campus_sel = df_seleccion['Campus'].unique()
-            nombres_sel = df_seleccion['Asignatura'].unique()
-            
-            busy_dict = {}
-            for _, r in df_seleccion.iterrows():
-                if r['Fecha_str'] not in busy_dict: busy_dict[r['Fecha_str']] = []
-                busy_dict[r['Fecha_str']].append((r['Hora Inicio'], r['Hora Fin']))
-            
-            df_eval = df_disponibles[~df_disponibles['Asig_Grupo'].isin(grupos_sel)]
-            recomendaciones = []
-            
-            for asig_grupo, df_grupo in df_eval.groupby('Asig_Grupo'):
-                horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
-                if horas_disp <= 0: continue
-                
-                tiene_solape = False
-                for _, r in df_grupo.iterrows():
-                    f = r['Fecha_str']
-                    if f in busy_dict:
-                        hi, hf = r['Hora Inicio'], r['Hora Fin']
-                        for (b_hi, b_hf) in busy_dict[f]:
-                            if hi < b_hf and b_hi < hf:
-                                tiene_solape = True
-                                break
-                    if tiene_solape: break
-                if tiene_solape: continue
-                
-                score = 0
-                campus_g, codigo_g, nombre_g = df_grupo['Campus'].iloc[0], df_grupo['Código'].iloc[0], df_grupo['Asignatura'].iloc[0]
-                if campus_g in campus_sel: score += 10
-                if nombre_g in nombres_sel: score += 20 
-                if horas_disp <= horas_faltantes: score += 5 
-                
-                recomendaciones.append({'Asig_Grupo': asig_grupo, 'Nombre': nombre_g, 'Codigo': codigo_g, 'Horas': horas_disp, 'Campus': campus_g, 'Score': score})
-            
-            if recomendaciones:
-                recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
-                top_3, top_10 = recomendaciones[:3], recomendaciones[3:10]
-                st.sidebar.caption("Opciones compatibles listas para añadir:")
-                for rec in top_3:
-                    st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-                    st.sidebar.button("➕ Añadir a mi POD", key=f"btn_t3_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
-                    st.sidebar.markdown("---")
-                if top_10:
-                    with st.sidebar.expander("Ver más sugerencias (Top 10)"):
-                        for rec in top_10:
-                            st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-                            st.button("➕ Añadir a mi POD", key=f"btn_t10_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
-                            st.markdown("---")
-            else:
-                st.sidebar.warning("No hay asignaturas compatibles con tu horario.")
+            if not strict_mode:
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("💡 Sugerencias Inteligentes")
+                grupos_sel = df_seleccion['Asig_Grupo'].unique()
+                campus_sel = df_seleccion['Campus'].unique()
+                nombres_sel = df_seleccion['Asignatura'].unique()
+                df_eval = df_disponibles[~df_disponibles['Asig_Grupo'].isin(grupos_sel)]
+                recomendaciones = []
+                for asig_grupo, df_grupo in df_eval.groupby('Asig_Grupo'):
+                    horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
+                    if horas_disp <= 0: continue
+                    tiene_solape = False
+                    for _, r in df_grupo.iterrows():
+                        f = r['Fecha_str']
+                        if f in busy_dict:
+                            hi, hf = r['Hora Inicio'], r['Hora Fin']
+                            for (b_hi, b_hf) in busy_dict[f]:
+                                if hi < b_hf and b_hi < hf:
+                                    tiene_solape = True
+                                    break
+                        if tiene_solape: break
+                    if tiene_solape: continue
+                    score = 0
+                    campus_g, codigo_g, nombre_g = df_grupo['Campus'].iloc[0], df_grupo['Código'].iloc[0], df_grupo['Asignatura'].iloc[0]
+                    if campus_g in campus_sel: score += 10
+                    if nombre_g in nombres_sel: score += 20 
+                    if horas_disp <= horas_faltantes: score += 5 
+                    recomendaciones.append({'Asig_Grupo': asig_grupo, 'Nombre': nombre_g, 'Codigo': codigo_g, 'Horas': horas_disp, 'Campus': campus_g, 'Score': score})
+                if recomendaciones:
+                    recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
+                    top_3, top_10 = recomendaciones[:3], recomendaciones[3:10]
+                    st.sidebar.caption("Opciones compatibles listas para añadir:")
+                    for rec in top_3:
+                        st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
+                        st.sidebar.button("➕ Añadir a mi POD", key=f"btn_t3_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
+                        st.sidebar.markdown("---")
         else:
             st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
     else:
@@ -307,9 +358,18 @@ else:
 
     mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_eventos['Código'].unique())}
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⏰ Horario Semanal", "📅 Calendario", "📊 Análisis de Conflictos", "🧑‍🏫 Revisión de Compañeros", "📈 Estado Global"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "👤 MI POD: Horario Semanal", 
+        "👤 MI POD: Calendario", 
+        "👤 MI POD: Conflictos", 
+        "👥 GENERAL: Revisión de Compañeros", 
+        "🌐 GENERAL: Estado Global"
+    ])
     
     with tab1:
+        if conflictos_exist:
+            st.error("⚠️ **¡Atención!** Se han detectado solapamientos en tu selección. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+            
         if not df_seleccion.empty:
             for semestre in sorted(df_seleccion['Semestre'].astype(str).unique()):
                 st.markdown(f"#### 📅 {semestre.upper()}")
@@ -436,7 +496,7 @@ else:
                     if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
                 
                 if H_T in [70, 90] and h_T > 60:
-                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (teoría+1desdoble), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
+                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                     alertas_normativa.append(err_msg)
                 else:
                     if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
@@ -445,7 +505,7 @@ else:
                         if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
                         else: detalles.append(f"Teoría ({madre}): No disponible")
                         for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles. (Asig. 70/90h: Max 60h o el resto).*"
+                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 ÚNICO Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles.*"
                         alertas_normativa.append(err_msg)
             
             if alertas_normativa:
@@ -497,7 +557,7 @@ else:
             st.info("Sin asignaturas seleccionadas.")
 
     with tab4:
-        st.subheader("Buscador y Revisión de Horarios de Compañeros")
+        st.subheader("Revisión y Cumplimiento de la Normativa")
         lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
         prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores)
         
@@ -542,7 +602,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Cumplimiento de la Normativa del Compañero")
+            st.markdown("#### 📜 Revisión de Normativa")
             alertas_normativa_prof = []
             
             familias_prof = {}
@@ -611,7 +671,7 @@ else:
                     if h_T == (H_T - 60) and cero_prac: es_resto_teoria_oculta = True
 
                 if H_T in [70, 90] and h_T > 60:
-                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (teoría) permitido para un solo docente."
+                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (50h teoría + 10h desdobles) permitido para un solo docente."
                     alertas_normativa_prof.append(err_msg)
                 else:
                     if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
@@ -625,7 +685,7 @@ else:
                 st.warning("⚠️ **Posibles incumplimientos de normativa en el POD de este docente:**")
                 for alerta in alertas_normativa_prof: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta y límites de 60h.")
+                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta.")
             
             st.markdown("---")
             

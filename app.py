@@ -34,7 +34,7 @@ def buscar_fuerza_profesor(nombre_pod, df_fuerza):
     for idx, row in df_fuerza.iterrows():
         nombre_f_clean = simplificar_nombre(row['Nombre'])
         if all(p in nombre_f_clean for p in partes_pod):
-            row['Original_Index'] = idx  # Guardamos el índice original
+            row['Original_Index'] = idx
             return row
     return None
 
@@ -148,7 +148,6 @@ if df_eventos is None or df_eventos.empty:
 else:
     lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
     
-    # 0. CARGAR PERFIL
     st.sidebar.header("0. 🧑‍🏫 Cargar Perfil (2ª Vuelta)")
     idx_prof = lista_profesores.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores else 0
     prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil para cargar tus horas:", ["-- Ninguno --"] + lista_profesores, index=idx_prof)
@@ -165,7 +164,6 @@ else:
             st.session_state['horas_precargadas'] = {}
         st.rerun()
 
-    # 1. FILTROS PRINCIPALES
     st.sidebar.header("1. 🎯 Filtros Principales")
     lista_campus = list(df_eventos['Campus'].dropna().unique())
     campus_elegidos = st.sidebar.multiselect("Campus:", lista_campus, default=['MOSTOLES'] if 'MOSTOLES' in lista_campus else [])
@@ -177,7 +175,6 @@ else:
     titulaciones_elegidas = st.sidebar.multiselect("Titulaciones:", sorted(list(df_f2['Titulación'].dropna().unique())))
     df_f3 = df_f2[df_f2['Titulación'].isin(titulaciones_elegidas)] if titulaciones_elegidas else df_f2
 
-    # 2. FILTROS DE HORARIO Y DISPONIBILIDAD
     st.sidebar.header("2. ⏱️ Filtros y Disponibilidad")
     turnos_disp = sorted(list(df_f3['Turno'].dropna().unique()))
     turnos_elegidos = st.sidebar.multiselect("Turno (Mañana/Tarde):", turnos_disp, default=turnos_disp)
@@ -185,17 +182,14 @@ else:
 
     ocultar_compartidas = st.sidebar.checkbox("Ocultar asignaturas compartidas (ya empezadas)")
     if ocultar_compartidas:
-        # Mantenemos las que no tienen profesor O las que pertenecen al perfil actualmente cargado
         df_f4 = df_f4[(df_f4['Profesor_Original'] == 'Ninguno') | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])]
 
-    # 3. EXCLUIR ASIGNATURAS
     st.sidebar.header("3. 🚫 Excluir Asignaturas")
     asignaturas_nombres = sorted(list(df_f4['Asignatura'].dropna().unique()))
     evitar_asig = st.sidebar.multiselect("Selecciona nombres a evitar:", asignaturas_nombres)
     if evitar_asig:
         df_f4 = df_f4[~df_f4['Asignatura'].isin(evitar_asig)]
 
-    # 4. SELECCIÓN DE ASIGNATURAS
     st.sidebar.header("4. 📋 Seleccionar Asignaturas")
     mask_disp = (df_f4['Horas_Disponibles'] > 0) | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])
     df_disponibles = df_f4[mask_disp].copy()
@@ -203,7 +197,6 @@ else:
     df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
     lista_opciones = sorted(list(df_disponibles.drop_duplicates(subset=['Código', 'Grupo'])['Asig_Grupo'].dropna().unique()))
     
-    # Limpiamos seleccionados que ya no estén en la lista
     st.session_state['seleccion_asignaturas'] = [x for x in st.session_state['seleccion_asignaturas'] if x in lista_opciones]
     asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos:", lista_opciones, key='seleccion_asignaturas')
 
@@ -655,30 +648,17 @@ else:
         df_unicos_prof = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
         total_asignadas = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno']['Horas_Profesor'].sum()
         
-        total_vacantes = df_unicos_global['Horas_Disponibles'].sum()
-        
         balance = total_asignadas - total_horas_area
         signo_balance = "+" if balance > 0 else ""
         
         pct_global = (total_asignadas / total_horas_area) * 100 if total_horas_area > 0 else 0
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("📚 Horas Totales Área", f"{total_horas_area} h")
-        col2.metric("🧑‍🏫 Horas Asignadas", f"{total_asignadas} h")
-        col3.metric("⚖️ Balance de Elección", f"{balance} h", delta=f"{signo_balance}{balance} h respecto a Total Área", delta_color="normal" if balance >= 0 else "inverse")
-        col4.metric("📊 Progreso Global", f"{pct_global:.1f} %")
-        
-        st.progress(min(total_asignadas / total_horas_area, 1.0) if total_horas_area > 0 else 0.0)
-        
-        st.markdown("---")
-        st.markdown("#### 🧑‍🏫 Progreso y Turno de Profesores")
-        
+        # Procesamos a los profesores para el segundo balance
         datos_profs = []
         horas_por_prof = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
         profs_procesados = set()
         
         if not df_fuerza.empty and 'Nombre' in df_fuerza.columns:
-            # Para mantener el orden original, creamos un iterador con índice
             df_fuerza_ordenado = df_fuerza.copy()
             df_fuerza_ordenado['Index_Orig'] = range(len(df_fuerza_ordenado))
             
@@ -710,14 +690,13 @@ else:
                     'Estado': "" 
                 })
         
-        # Incorporamos a cualquier profesor que no estuviera en Fuerza Docente
         for nom_pod, h in horas_por_prof.items():
             if nom_pod not in profs_procesados:
                 fuerza = 240 
                 pct = min(h / fuerza, 1.0)
                 is_finished = h >= fuerza
                 datos_profs.append({
-                    'Original_Index': 9999, # Al final de todo
+                    'Original_Index': 9999, 
                     'Is_Finished': is_finished,
                     'Profesor': f"{nom_pod} (No en Excel Fuerza)",
                     'Horas Asignadas': h,
@@ -726,29 +705,60 @@ else:
                     'Ratio': pct,
                     'Estado': ""
                 })
+
+        # --- BALANCE ACTIVO ---
+        fuerza_activos = sum(p['Objetivo (Fuerza)'] for p in datos_profs if p['Horas Asignadas'] > 0)
+        asignadas_activos = sum(p['Horas Asignadas'] for p in datos_profs if p['Horas Asignadas'] > 0)
+        balance_activo = asignadas_activos - fuerza_activos
+        signo_activo = "+" if balance_activo > 0 else ""
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("📚 Asignaturas Área", f"{total_horas_area} h")
+        col2.metric("🧑‍🏫 Asignadas", f"{total_asignadas} h")
+        col3.metric("⚖️ Balance Área", f"{balance} h", delta=f"{signo_balance}{balance} h respecto a Total Área", delta_color="normal" if balance >= 0 else "inverse")
+        col4.metric("⚖️ Balance Activos", f"{balance_activo} h", delta=f"{signo_activo}{balance_activo} h respecto a docentes activos", delta_color="normal" if balance_activo >= 0 else "inverse")
+        col5.metric("📊 Progreso Global", f"{pct_global:.1f} %")
+        
+        st.progress(min(total_asignadas / total_horas_area, 1.0) if total_horas_area > 0 else 0.0)
+        
+        st.markdown("---")
+        st.markdown("#### 🧑‍🏫 Progreso y Turno de Profesores")
         
         if datos_profs:
-            # Ordenamos: Primero los que NO han acabado, y dentro de ellos el orden original.
-            # Luego los que SÍ han acabado, y dentro de ellos el orden original.
-            sorted_profs = sorted(datos_profs, key=lambda x: (x['Is_Finished'], x['Original_Index']))
+            hay_profesores_sin_horas = any(p['Horas Asignadas'] == 0 and p['Original_Index'] != 9999 for p in datos_profs)
             
-            # Marcamos al siguiente que le toca elegir
+            # Ordenamos estrictamente por el índice original de Fuerza Docente
+            sorted_profs = sorted(datos_profs, key=lambda x: x['Original_Index'])
             found_next = False
+            
             for p in sorted_profs:
-                if not p['Is_Finished'] and not found_next:
-                    p['Estado'] = "👉 LE TOCA ELEGIR"
-                    found_next = True
-                elif p['Is_Finished']:
+                if p['Is_Finished']:
                     p['Estado'] = "Completado ✅"
                 else:
-                    p['Estado'] = "En espera ⏳"
+                    if hay_profesores_sin_horas:
+                        if p['Horas Asignadas'] == 0:
+                            if not found_next:
+                                p['Estado'] = "👉 LE TOCA ELEGIR (1ª Vuelta)"
+                                found_next = True
+                            else:
+                                p['Estado'] = "En espera ⏳ (1ª Vuelta)"
+                        else:
+                            p['Estado'] = "Esperando 2ª Vuelta ⏳"
+                    else:
+                        if not found_next:
+                            p['Estado'] = "👉 LE TOCA ELEGIR (2ª+ Vuelta)"
+                            found_next = True
+                        else:
+                            p['Estado'] = "En espera ⏳"
             
-            # Limpiamos las columnas de ordenación auxiliares para mostrar la tabla
-            for p in sorted_profs:
+            # Reordenamos visualmente: primero los no terminados, luego los completados
+            sorted_profs_display = sorted(sorted_profs, key=lambda x: (x['Is_Finished'], x['Original_Index']))
+            
+            for p in sorted_profs_display:
                 del p['Original_Index']
                 del p['Is_Finished']
                 
-            df_resumen = pd.DataFrame(sorted_profs)
+            df_resumen = pd.DataFrame(sorted_profs_display)
             
             st.dataframe(
                 df_resumen,

@@ -247,7 +247,8 @@ else:
 
     mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_eventos['Código'].unique())}
 
-    tab1, tab2, tab3, tab4 = st.tabs(["⏰ Horario Semanal", "📅 Calendario", "📊 Análisis de Conflictos", "🧑‍🏫 Compañeros"])
+    # --- PESTAÑAS ---
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⏰ Horario Semanal", "📅 Calendario", "📊 Análisis de Conflictos", "🧑‍🏫 Compañeros", "📈 Estado Global"])
     
     with tab1:
         if not df_seleccion.empty:
@@ -367,7 +368,6 @@ else:
                     solo_teoria = is_full(h_T, H_T) and cero_practicas
                     es_mitad = is_half(h_T, H_T) and mitad_practicas
                     
-                    # Validar si coge 60h en asig. de 70 o 90h (se considera "Toda la teoría")
                     es_teoria_oculta = (H_T in [70, 90] and h_T == 60) and cero_practicas
                     
                     if not (es_todo or solo_teoria or es_mitad or es_teoria_oculta):
@@ -444,7 +444,7 @@ else:
             descargas = 0
             if info_fuerza is not None:
                 fuerza_real = pd.to_numeric(info_fuerza.get('Fuerza', 240), errors='coerce')
-                fuerza_real = 240 if pd.isna(fuerza_real) or fuerza_real == 0 else fuerza_real
+                fuerza_real = 240 if pd.isna(fuerza_real) or fuerza_real <= 0 else fuerza_real
                 descargas = pd.to_numeric(info_fuerza.get('DescargaTotal', 0), errors='coerce')
                 descargas = 0 if pd.isna(descargas) else descargas
             
@@ -520,7 +520,6 @@ else:
                     hp = get_h_prof(codigo, p)
                     if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
                 
-                # --- NUEVA REGLA COMPAÑEROS: ASIGNATURAS DE 70 Y 90 HORAS ---
                 if H_T in [70, 90] and h_T > 60:
                     err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (teoría) permitido para un solo docente."
                     alertas_normativa_prof.append(err_msg)
@@ -569,3 +568,103 @@ else:
                 st.markdown(html_prof + "</table>", unsafe_allow_html=True)
         else:
             st.info("Utiliza el desplegable para buscar el horario y estado del POD de un compañero.")
+
+    # --- NUEVA PESTAÑA 5: ESTADO GLOBAL DEL ÁREA ---
+    with tab5:
+        st.subheader("📈 Estado Global de la Elección de POD")
+        
+        # 1. Cálculos de métricas globales del departamento
+        df_unicos_global = df_eventos.drop_duplicates(subset=['Código', 'Grupo'])
+        total_horas_area = df_unicos_global['Horas_Totales'].sum()
+        
+        df_unicos_prof = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
+        total_asignadas = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno']['Horas_Profesor'].sum()
+        
+        total_vacantes = df_unicos_global['Horas_Disponibles'].sum()
+        
+        pct_global = (total_asignadas / total_horas_area) * 100 if total_horas_area > 0 else 0
+        
+        # Renderizamos los KPIs superiores
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📚 Horas Totales Área", f"{total_horas_area} h")
+        col2.metric("🧑‍🏫 Horas Asignadas", f"{total_asignadas} h")
+        col3.metric("🪑 Horas Vacantes", f"{total_vacantes} h")
+        col4.metric("📊 Progreso Global", f"{pct_global:.1f} %")
+        
+        st.progress(min(total_asignadas / total_horas_area, 1.0) if total_horas_area > 0 else 0.0)
+        
+        st.markdown("---")
+        st.markdown("#### 🧑‍🏫 Progreso Individual de Profesores")
+        
+        # 2. Generamos la tabla con barras de progreso individuales
+        datos_profs = []
+        horas_por_prof = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
+        profs_procesados = set()
+        
+        if not df_fuerza.empty and 'Nombre' in df_fuerza.columns:
+            for _, row_f in df_fuerza.iterrows():
+                nom_f = row_f['Nombre']
+                if pd.isna(nom_f): continue
+                
+                fuerza = pd.to_numeric(row_f.get('Fuerza', 240), errors='coerce')
+                fuerza = 240 if pd.isna(fuerza) or fuerza <= 0 else fuerza
+                
+                h_asig = 0
+                for nom_pod, h in horas_por_prof.items():
+                    partes_pod = simplificar_nombre(nom_pod).replace(',', ' ').split()
+                    if all(p in simplificar_nombre(nom_f) for p in partes_pod):
+                        h_asig += h
+                        profs_procesados.add(nom_pod)
+                        
+                pct = min(h_asig / fuerza, 1.0) if fuerza > 0 else 0.0
+                estado_texto = "Completado ✅" if h_asig >= fuerza else "En curso ⏳"
+                
+                datos_profs.append({
+                    'Profesor': nom_f,
+                    'Horas Asignadas': h_asig,
+                    'Objetivo (Fuerza)': fuerza,
+                    'Progreso %': round((h_asig / fuerza) * 100, 1) if fuerza > 0 else 0.0,
+                    'Ratio': pct,
+                    'Estado': estado_texto
+                })
+        
+        # Incorporamos a cualquier profesor que haya pillado horas pero no estuviera en el excel de Fuerza Docente
+        for nom_pod, h in horas_por_prof.items():
+            if nom_pod not in profs_procesados:
+                fuerza = 240 # Valor por defecto si no están en el Excel de recursos humanos
+                pct = min(h / fuerza, 1.0)
+                estado_texto = "Completado ✅" if h >= fuerza else "En curso ⏳"
+                datos_profs.append({
+                    'Profesor': f"{nom_pod} (No en Excel Fuerza)",
+                    'Horas Asignadas': h,
+                    'Objetivo (Fuerza)': fuerza,
+                    'Progreso %': round((h / fuerza) * 100, 1),
+                    'Ratio': pct,
+                    'Estado': estado_texto
+                })
+        
+        # 3. Dibujamos la tabla mágica con Streamlit Dataframe Configuration
+        if datos_profs:
+            df_resumen = pd.DataFrame(datos_profs).sort_values('Progreso %', ascending=False)
+            
+            st.dataframe(
+                df_resumen,
+                column_config={
+                    "Profesor": st.column_config.TextColumn("Profesor / Investigador", width="large"),
+                    "Horas Asignadas": st.column_config.NumberColumn("Horas Asig.", format="%d h"),
+                    "Objetivo (Fuerza)": st.column_config.NumberColumn("Fuerza POD", format="%d h"),
+                    "Progreso %": st.column_config.NumberColumn("% Completado", format="%.1f %%"),
+                    "Ratio": st.column_config.ProgressColumn(
+                        "Barra de Progreso",
+                        help="Nivel de completitud del POD frente a su objetivo",
+                        format="%.2f",
+                        min_value=0,
+                        max_value=1.0,
+                    ),
+                    "Estado": st.column_config.TextColumn("Estado")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No hay datos de profesores para mostrar todavía. Empieza a rellenar el Excel para ver el progreso del equipo.")

@@ -215,7 +215,6 @@ else:
     start_str = rango_horas[0].strftime("%H:%M")
     end_str = rango_horas[1].strftime("%H:%M")
     
-    # NUEVA LÓGICA: Exclusión estricta de asignaturas fuera de rango
     claves_asignaturas = df_f3['Código'] + "_" + df_f3['Grupo'].astype(str)
     condicion_fuera_rango = (df_f3['Hora Inicio'] < start_str) | (df_f3['Hora Fin'] > end_str)
     claves_fuera = df_f3[condicion_fuera_rango]['Código'] + "_" + df_f3[condicion_fuera_rango]['Grupo'].astype(str)
@@ -288,7 +287,6 @@ else:
     
     df_seleccion = pd.DataFrame()
     horas_asumidas_dict = {}
-    alertas_normativa = []
 
     if asignaturas_elegidas:
         df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
@@ -367,10 +365,17 @@ else:
         else:
             st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
     else:
-        st.sidebar.info("👈 Selecciona asignaturas en el menú lateral.")
+        st.sidebar.info("👈 Selecciona asignaturas en el menú lateral para empezar.")
+        objetivo_horas = st.session_state.get('fuerza_objetivo', 240)
+        horas_totales_asumidas = 0
 
-    # --- CÁLCULO DE NORMATIVA PARA ALERTAS GLOBALES ---
+    # --- CÁLCULOS GLOBALES (CONFLICTOS Y NORMATIVA) ANTES DE LAS PESTAÑAS ---
+    alertas_normativa = []
+    conflictos_lista = []
+    alertas_desplazamiento = []
+    
     if not df_seleccion.empty:
+        # 1. Normativa
         familias_evaluadas = {}
         for _, r in df_unicos.iterrows():
             codigo = r['Código']
@@ -446,6 +451,29 @@ else:
                     err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 ÚNICO Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles.*"
                     alertas_normativa.append(err_msg)
 
+        # 2. Conflictos y Desplazamientos
+        df_sel_ord = df_seleccion.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
+        def min_entre_horas(h1, h2):
+            try: return (int(h2.split(':')[0])*60 + int(h2.split(':')[1])) - (int(h1.split(':')[0])*60 + int(h1.split(':')[1]))
+            except: return 999
+
+        for fecha, grupo_fecha in df_sel_ord.groupby('Fecha_str'):
+            if len(grupo_fecha) > 1:
+                clases = grupo_fecha.to_dict('records')
+                for i in range(len(clases)):
+                    for j in range(i + 1, len(clases)):
+                        inicio1, fin1, inicio2, fin2 = clases[i]['Hora Inicio'], clases[i]['Hora Fin'], clases[j]['Hora Inicio'], clases[j]['Hora Fin']
+                        campus1, campus2 = clases[i]['Campus'], clases[j]['Campus']
+                        un_id1 = f"[{clases[i]['Código']}] {clases[i]['Asignatura']} ({clases[i]['Grupo']})"
+                        un_id2 = f"[{clases[j]['Código']}] {clases[j]['Asignatura']} ({clases[j]['Grupo']})"
+                        
+                        if inicio1 < fin2 and inicio2 < fin1:
+                            conflictos_lista.append(f"**{fecha}:** {un_id1} ({inicio1}-{fin1}) choca con {un_id2} ({inicio2}-{fin2})")
+                        elif campus1 != campus2:
+                            gap = min_entre_horas(fin1, inicio2)
+                            if 0 <= gap < 60:
+                                alertas_desplazamiento.append(f"**{fecha}:** Margen crítico ({gap} min) de {campus1} ({un_id1}, fin {fin1}) ➔ {campus2} ({un_id2}, inicio {inicio2})")
+
     mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_eventos['Código'].unique())}
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -457,12 +485,38 @@ else:
     ])
     
     with tab1:
-        if conflictos_exist:
-            st.error("⚠️ **¡Atención!** Se han detectado solapamientos de horario en tu selección. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+        if conflictos_lista:
+            st.error("⚠️ **¡Atención!** Se han detectado solapamientos de horario en tu selección. Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
         if alertas_normativa:
-            st.error("⚠️ **¡Atención!** Tu selección actual no cumple la normativa de 1ª vuelta. Por favor, ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+            st.error("⚠️ **¡Atención!** Tu selección actual no cumple la normativa de 1ª vuelta. Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+        if alertas_desplazamiento:
+            st.warning("🚖 **¡Aviso de Movilidad!** Tienes márgenes de tiempo muy justos para cambiar de sede (menos de 60 min). Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
 
         if not df_seleccion.empty:
+            # CIRCULAR PROGRESS BAR
+            pct_circle = min(horas_totales_asumidas / objetivo_horas, 1.0)
+            circ = 2 * 3.14159 * 40
+            offset = circ - (circ * pct_circle)
+            color_circle = "#4CAF50" if horas_totales_asumidas >= objetivo_horas else "#2196F3"
+            
+            html_circle = f"""
+            <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 20px;">
+                <div style="position: relative; width: 120px; height: 120px;">
+                    <svg width="120" height="120">
+                        <circle cx="60" cy="60" r="40" stroke="#e6e6e6" stroke-width="10" fill="none" />
+                        <circle cx="60" cy="60" r="40" stroke="{color_circle}" stroke-width="10" fill="none" 
+                                stroke-dasharray="{circ}" stroke-dashoffset="{offset}" 
+                                stroke-linecap="round" style="transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dashoffset 0.5s ease-in-out;" />
+                    </svg>
+                    <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                        <span style="font-size: 1.4em; font-weight: bold; color: #333;">{horas_totales_asumidas}</span>
+                        <span style="font-size: 0.8em; color: #777; font-weight: bold;">/ {objetivo_horas}h</span>
+                    </div>
+                </div>
+            </div>
+            """
+            st.markdown(html_circle, unsafe_allow_html=True)
+
             for semestre in sorted(df_seleccion['Semestre'].astype(str).unique()):
                 st.markdown(f"#### 📅 {semestre.upper()}")
                 df_sem = df_seleccion[df_seleccion['Semestre'] == semestre].copy()
@@ -492,8 +546,6 @@ else:
                 with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
                 with col4: st.button("❌ Quitar", key=f"del_{r['Asig_Grupo']}", on_click=eliminar_asignatura, args=(r['Asig_Grupo'],))
                 st.markdown("---")
-        else:
-            st.info("Sin asignaturas seleccionadas.")
 
     with tab2:
         if not df_seleccion.empty:
@@ -521,7 +573,6 @@ else:
         st.subheader("Análisis de Solapamientos, Desplazamientos y Normativa")
         if not df_seleccion.empty:
             
-            # --- 1. AUDITORÍA DE NORMATIVA (1ª VUELTA) ---
             st.markdown("### 📜 Cumplimiento de Normativa (1ª Vuelta)")
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
@@ -531,32 +582,7 @@ else:
 
             st.markdown("---")
 
-            # --- 2. SOLAPAMIENTOS Y DESPLAZAMIENTOS ---
             st.markdown("### 🏃‍♂️ Cruces y Desplazamientos")
-            conflictos_lista, alertas_desplazamiento = [], []
-            df_sel_ord = df_seleccion.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
-            
-            def min_entre_horas(h1, h2):
-                try: return (int(h2.split(':')[0])*60 + int(h2.split(':')[1])) - (int(h1.split(':')[0])*60 + int(h1.split(':')[1]))
-                except: return 999
-
-            for fecha, grupo_fecha in df_sel_ord.groupby('Fecha_str'):
-                if len(grupo_fecha) > 1:
-                    clases = grupo_fecha.to_dict('records')
-                    for i in range(len(clases)):
-                        for j in range(i + 1, len(clases)):
-                            inicio1, fin1, inicio2, fin2 = clases[i]['Hora Inicio'], clases[i]['Hora Fin'], clases[j]['Hora Inicio'], clases[j]['Hora Fin']
-                            campus1, campus2 = clases[i]['Campus'], clases[j]['Campus']
-                            un_id1 = f"[{clases[i]['Código']}] {clases[i]['Asignatura']} ({clases[i]['Grupo']})"
-                            un_id2 = f"[{clases[j]['Código']}] {clases[j]['Asignatura']} ({clases[j]['Grupo']})"
-                            
-                            if inicio1 < fin2 and inicio2 < fin1:
-                                conflictos_lista.append(f"**{fecha}:** {un_id1} ({inicio1}-{fin1}) choca con {un_id2} ({inicio2}-{fin2})")
-                            elif campus1 != campus2:
-                                gap = min_entre_horas(fin1, inicio2)
-                                if 0 <= gap < 60:
-                                    alertas_desplazamiento.append(f"**{fecha}:** Margen crítico ({gap} min) de {campus1} ({un_id1}, fin {fin1}) ➔ {campus2} ({un_id2}, inicio {inicio2})")
-
             if conflictos_lista:
                 st.error("⚠️ Solapamientos horarios estrictos detectados:")
                 for c in conflictos_lista: st.write(f"- {c}")
@@ -572,7 +598,7 @@ else:
             st.info("Sin asignaturas seleccionadas.")
 
     with tab4:
-        st.subheader("Buscador y Revisión de Horarios de Compañeros")
+        st.subheader("Revisión y Cumplimiento de la Normativa")
         lista_profesores_total = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
         prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores_total)
         
@@ -617,7 +643,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Cumplimiento de la Normativa del Compañero")
+            st.markdown("#### 📜 Revisión de Normativa")
             alertas_normativa_prof = []
             
             familias_prof = {}

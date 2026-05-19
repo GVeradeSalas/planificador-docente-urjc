@@ -436,7 +436,7 @@ else:
                     if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
                 
                 if H_T in [70, 90] and h_T > 60:
-                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (teoría), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
+                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (teoría+1desdoble), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                     alertas_normativa.append(err_msg)
                 else:
                     if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):

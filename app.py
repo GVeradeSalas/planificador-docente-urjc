@@ -277,60 +277,61 @@ else:
     with tab1:
         if not df_seleccion.empty:
             st.subheader("Distribución de Horas por Tramo Semanal")
-            df_seleccion['Franja Horaria'] = df_seleccion['Hora Inicio'] + " - " + df_seleccion['Hora Fin']
-            franjas_ordenadas = sorted(df_seleccion['Franja Horaria'].unique())
             
-            # 1. Dibujamos el Cuadrante (solo con información esencial para no saturar)
-            html_cuadrante = "<style>"
-            html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
-            html_cuadrante += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
-            html_cuadrante += ".ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; }"
-            html_cuadrante += ".hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; }"
-            html_cuadrante += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }"
-            html_cuadrante += ".card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; }"
-            html_cuadrante += ".card-i { color: #555; }"
-            html_cuadrante += "</style><table class='ht'>"
-            html_cuadrante += "<tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
+            # Obtenemos los semestres únicos presentes en la selección
+            semestres_presentes = sorted(df_seleccion['Semestre'].astype(str).unique())
             
-            for franja in franjas_ordenadas:
-                html_cuadrante += f"<tr><td class='hc'>{franja}</td>"
-                for dia in ['L', 'M', 'X', 'J', 'V']:
-                    html_cuadrante += "<td>"
-                    clases_celda = df_seleccion[(df_seleccion['Franja Horaria'] == franja) & (df_seleccion['Día'] == dia)]
-                    for _, r in clases_celda.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-                        bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
-                        h_asumidas = horas_asumidas_dict.get(f"{r['Código']}_{r['Grupo']}", 0)
-                        html_cuadrante += f"<div class='card-min' style='background-color: {bg_color};'>"
-                        html_cuadrante += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
-                        html_cuadrante += f"<div class='card-i'>{r['Grupo']} ({h_asumidas}h)</div>"
-                        html_cuadrante += "</div>"
-                    html_cuadrante += "</td>"
-                html_cuadrante += "</tr>"
-            html_cuadrante += "</table>"
-            st.markdown(html_cuadrante, unsafe_allow_html=True)
+            for semestre in semestres_presentes:
+                st.markdown(f"#### 📅 {semestre.upper()}")
+                df_sem = df_seleccion[df_seleccion['Semestre'] == semestre].copy()
+                
+                df_sem['Franja Horaria'] = df_sem['Hora Inicio'] + " - " + df_sem['Hora Fin']
+                franjas_ordenadas = sorted(df_sem['Franja Horaria'].unique())
+                
+                html_cuadrante = "<style>"
+                html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; margin-bottom: 25px; }"
+                html_cuadrante += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
+                html_cuadrante += ".ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; }"
+                html_cuadrante += ".hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; }"
+                html_cuadrante += ".card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }"
+                html_cuadrante += ".card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; }"
+                html_cuadrante += ".card-i { color: #555; }"
+                html_cuadrante += "</style><table class='ht'>"
+                html_cuadrante += "<tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
+                
+                for franja in franjas_ordenadas:
+                    html_cuadrante += f"<tr><td class='hc'>{franja}</td>"
+                    for dia in ['L', 'M', 'X', 'J', 'V']:
+                        html_cuadrante += "<td>"
+                        clases_celda = df_sem[(df_sem['Franja Horaria'] == franja) & (df_sem['Día'] == dia)]
+                        for _, r in clases_celda.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
+                            bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
+                            h_asumidas = horas_asumidas_dict.get(f"{r['Código']}_{r['Grupo']}", 0)
+                            html_cuadrante += f"<div class='card-min' style='background-color: {bg_color};'>"
+                            html_cuadrante += f"<div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div>"
+                            html_cuadrante += f"<div class='card-i'>{r['Grupo']} ({h_asumidas}h)</div>"
+                            html_cuadrante += "</div>"
+                        html_cuadrante += "</td>"
+                    html_cuadrante += "</tr>"
+                html_cuadrante += "</table>"
+                st.markdown(html_cuadrante, unsafe_allow_html=True)
             
-            # 2. NUEVO: Leyenda Interactiva con botones para eliminar
+            # LEYENDA INTERACTIVA AL FINAL
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("📋 Leyenda y Gestión de Asignaturas")
             st.write("Consulta los detalles de tus asignaturas en el calendario o elimínalas si ya no las quieres:")
             
             for _, r in df_seleccion.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
                 bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
-                
-                # Usamos columnas de Streamlit para alinear la tarjeta de leyenda y el botón
                 col1, col2, col3, col4 = st.columns([0.5, 3.5, 4, 1.5])
-                
                 with col1:
-                    # Muestra el mismo bloque de color que en el calendario
                     st.markdown(f"<div style='background-color: {bg_color}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
                 with col2:
-                    st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
                 with col3:
                     st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']}", unsafe_allow_html=True)
                 with col4:
-                    # Este botón llama a la función de eliminar y refresca la app
                     st.button("❌ Quitar", key=f"del_{r['Asig_Grupo']}", on_click=eliminar_asignatura, args=(r['Asig_Grupo'],))
-                
                 st.markdown("---")
                 
         else:
@@ -453,21 +454,30 @@ else:
                     else: st.success("✅ **POD aparentemente completo (>240h).**")
             
             st.markdown("#### Cuadrante Semanal")
-            df_prof['Franja Horaria'] = df_prof['Hora Inicio'] + " - " + df_prof['Hora Fin']
-            franjas_prof = sorted(df_prof['Franja Horaria'].unique())
             
-            html_prof = "<style>.ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; } .ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; } .ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; } .hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; } .card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }</style><table class='ht'><tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
-            
-            if franjas_prof:
-                for franja in franjas_prof:
-                    html_prof += f"<tr><td class='hc'>{franja}</td>"
-                    for dia in ['L', 'M', 'X', 'J', 'V']:
-                        html_prof += "<td>"
-                        for _, r in df_prof[(df_prof['Franja Horaria'] == franja) & (df_prof['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-                            bg_color = paleta[abs(hash(r['Código'])) % len(paleta)]
-                            html_prof += f"<div class='card-min' style='background-color: {bg_color};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({r['Horas_Profesor']}h)</div></div>"
-                        html_prof += "</td>"
-                    html_prof += "</tr>"
+            semestres_prof = sorted(df_prof['Semestre'].astype(str).unique())
+            if semestres_prof:
+                for semestre in semestres_prof:
+                    st.markdown(f"##### 📅 {semestre.upper()}")
+                    df_sem_prof = df_prof[df_prof['Semestre'] == semestre].copy()
+                    
+                    df_sem_prof['Franja Horaria'] = df_sem_prof['Hora Inicio'] + " - " + df_sem_prof['Hora Fin']
+                    franjas_prof = sorted(df_sem_prof['Franja Horaria'].unique())
+                    
+                    html_prof = "<style>.ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; margin-bottom: 20px;} .ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; } .ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; } .hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; } .card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }</style><table class='ht'><tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
+                    
+                    for franja in franjas_prof:
+                        html_prof += f"<tr><td class='hc'>{franja}</td>"
+                        for dia in ['L', 'M', 'X', 'J', 'V']:
+                            html_prof += "<td>"
+                            for _, r in df_sem_prof[(df_sem_prof['Franja Horaria'] == franja) & (df_sem_prof['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo']).iterrows():
+                                bg_color = paleta[abs(hash(r['Código'])) % len(paleta)]
+                                html_prof += f"<div class='card-min' style='background-color: {bg_color};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({r['Horas_Profesor']}h)</div></div>"
+                            html_prof += "</td>"
+                        html_prof += "</tr>"
+                    html_prof += "</table>"
+                    st.markdown(html_prof, unsafe_allow_html=True)
             else:
-                html_prof += "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No hay clases registradas en el POD para este docente.</td></tr>"
-            st.markdown(html_prof + "</table>", unsafe_allow_html=True)
+                st.info("No hay clases registradas en el POD para este docente.")
+        else:
+            st.info("Utiliza el desplegable para buscar el horario y estado del POD de un compañero.")

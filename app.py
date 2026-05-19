@@ -19,25 +19,17 @@ def eliminar_asignatura(asig_grupo):
         st.session_state['seleccion_asignaturas'].remove(asig_grupo)
 
 def simplificar_nombre(nombre):
-    if pd.isna(nombre):
-        return ""
-    n = unicodedata.normalize('NFD', str(nombre)).encode('ascii', 'ignore').decode('utf-8')
-    return n.lower()
+    if pd.isna(nombre): return ""
+    return unicodedata.normalize('NFD', str(nombre)).encode('ascii', 'ignore').decode('utf-8').lower()
 
 def buscar_fuerza_profesor(nombre_pod, df_fuerza):
-    if df_fuerza.empty or 'Nombre' not in df_fuerza.columns:
-        return None
+    if df_fuerza.empty or 'Nombre' not in df_fuerza.columns: return None
     nombre_pod_clean = simplificar_nombre(nombre_pod)
     partes_pod = nombre_pod_clean.replace(',', ' ').split()
     
     for _, row in df_fuerza.iterrows():
         nombre_f_clean = simplificar_nombre(row['Nombre'])
-        match = True
-        for p in partes_pod:
-            if p not in nombre_f_clean:
-                match = False
-                break
-        if match:
+        if all(p in nombre_f_clean for p in partes_pod):
             return row
     return None
 
@@ -47,10 +39,8 @@ def generar_fechas_fijas(dia_letra, semestre_str):
     if num_dia is None: return []
     
     semestre_clean = str(semestre_str).upper()
-    if "PRIMER" in semestre_clean:
-        start_date, end_date = "2026-09-10", "2026-12-22"
-    elif "SEGUNDO" in semestre_clean:
-        start_date, end_date = "2027-01-27", "2027-05-11"
+    if "PRIMER" in semestre_clean: start_date, end_date = "2026-09-10", "2026-12-22"
+    elif "SEGUNDO" in semestre_clean: start_date, end_date = "2027-01-27", "2027-05-11"
     else: return [] 
         
     fechas = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -58,15 +48,12 @@ def generar_fechas_fijas(dia_letra, semestre_str):
 
 @st.cache_data
 def cargar_fuerza_docente(ruta_archivo):
-    try:
-        return pd.read_excel(ruta_archivo, skiprows=1)
-    except Exception:
-        return pd.DataFrame()
+    try: return pd.read_excel(ruta_archivo, skiprows=1)
+    except Exception: return pd.DataFrame()
 
 @st.cache_data
 def cargar_y_procesar(ruta_archivo):
-    try:
-        df_crudo = pd.read_excel(ruta_archivo, skiprows=1)
+    try: df_crudo = pd.read_excel(ruta_archivo, skiprows=1)
     except Exception as e:
         st.error(f"Error al leer el archivo: {e}")
         return None
@@ -173,9 +160,9 @@ else:
 
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
-            
             st.sidebar.markdown("---")
             st.sidebar.subheader("💡 Sugerencias Inteligentes")
+            
             grupos_sel = df_seleccion['Asig_Grupo'].unique()
             campus_sel = df_seleccion['Campus'].unique()
             nombres_sel = df_seleccion['Asignatura'].unique()
@@ -303,40 +290,64 @@ else:
             st.markdown("### 📜 Normativa de Primera Vuelta")
             alertas_normativa = []
             
-            # Recopilar qué grupos se han seleccionado de cada código de asignatura
-            grupos_sel_normativa = {}
+            familias_evaluadas = set()
             for _, r in df_unicos.iterrows():
-                h_asum = horas_asumidas_dict.get(f"{r['Código']}_{r['Grupo']}", 0)
-                if h_asum > 0:
-                    if r['Código'] not in grupos_sel_normativa:
-                        grupos_sel_normativa[r['Código']] = {}
-                    grupos_sel_normativa[r['Código']][str(r['Grupo']).strip()] = r['Asignatura']
-            
-            for _, r in df_unicos.iterrows():
-                clave_id = f"{r['Código']}_{r['Grupo']}"
-                max_h = int(r['Horas_Disponibles'])
-                h_asum = horas_asumidas_dict.get(clave_id, 0)
+                codigo = r['Código']
                 grupo_str = str(r['Grupo']).strip()
+                h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
                 
                 if h_asum > 0:
-                    # 1. Comprobar fracciones de horas (100% o 50%)
-                    if h_asum != max_h and h_asum != (max_h // 2) and h_asum != ((max_h + 1) // 2):
-                        alertas_normativa.append(f"**[{r['Código']}] {r['Asignatura']} ({r['Grupo']})**: Has seleccionado {h_asum}h de {max_h}h. Debes coger la carga completa o exactamente la mitad.")
-                    
-                    # 2. Comprobar desdobles huérfanos (Ej: elegir M1P1 sin haber elegido M1)
                     match_desdoble = re.search(r'^(.*?)(P\d+)$', grupo_str, re.IGNORECASE)
-                    if match_desdoble:
-                        grupo_madre = match_desdoble.group(1).strip()
-                        if grupo_madre and grupo_madre not in grupos_sel_normativa.get(r['Código'], {}):
-                            alertas_normativa.append(f"**[{r['Código']}] {r['Asignatura']}**: Has seleccionado el desdoble **{grupo_str}**, pero no has seleccionado el grupo principal de teoría (**{grupo_madre}**). No puedes coger prácticas sin su teoría.")
+                    madre = match_desdoble.group(1).strip() if match_desdoble else grupo_str
+                    familias_evaluadas.add((codigo, madre, r['Asignatura']))
+
+            def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
+            def is_full(h, H): return H > 0 and h == H
+
+            for codigo, madre, nombre_asig in familias_evaluadas:
+                df_familia = df_disponibles[(df_disponibles['Código'] == codigo)]
+                grupo_teoria = None
+                desdobles = []
+                
+                for _, r_fam in df_familia.drop_duplicates(subset=['Grupo']).iterrows():
+                    g = str(r_fam['Grupo']).strip()
+                    if g == madre: grupo_teoria = r_fam
+                    elif re.match(rf'^{re.escape(madre)}P\d+$', g, re.IGNORECASE): desdobles.append(r_fam)
+                        
+                if grupo_teoria is not None:
+                    H_T = int(grupo_teoria['Horas_Disponibles'])
+                    h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
+                else:
+                    H_T, h_T = 0, 0
+                    
+                P_data = []
+                for d in desdobles:
+                    H_p = int(d['Horas_Disponibles'])
+                    h_p = horas_asumidas_dict.get(f"{codigo}_{str(d['Grupo']).strip()}", 0)
+                    P_data.append((str(d['Grupo']).strip(), h_p, H_p))
+                    
+                todo_teoria = is_full(h_T, H_T) if H_T > 0 else True
+                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data)
+                es_todo = todo_teoria and (todo_practicas if P_data else True)
+                
+                solo_teoria = is_full(h_T, H_T) and all(hp == 0 for _, hp, Hp in P_data)
+                
+                mitad_teoria = is_half(h_T, H_T) if H_T > 0 else True
+                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data)
+                es_mitad = mitad_teoria and (mitad_practicas if P_data else True)
+                
+                if not (es_todo or solo_teoria or es_mitad):
+                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida. "
+                    detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
+                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                    err_msg += " | ".join(detalles) + ". *Recuerda: O se coge todo (teoría + todas sus prácticas), o sólo la teoría, o exactamente la mitad de todo.*"
+                    alertas_normativa.append(err_msg)
             
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
-                for alerta in alertas_normativa:
-                    st.write(f"- {alerta}")
-                st.caption("Revisa tu selección en el menú lateral y los deslizadores de horas.")
+                for alerta in alertas_normativa: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones y desdobles cumplen con la normativa del departamento.")
+                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones (familias de teoría y desdobles) cumplen con la normativa.")
 
             st.markdown("---")
 

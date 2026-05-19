@@ -473,7 +473,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Auditoría de Normativa de Compañero")
+            st.markdown("#### 📜 Revisión/Cumplimiento de la Normativa")
             alertas_normativa_prof = []
             
             familias_prof = {}

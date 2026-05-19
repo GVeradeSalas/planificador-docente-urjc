@@ -160,9 +160,9 @@ else:
 
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
+            
             st.sidebar.markdown("---")
             st.sidebar.subheader("💡 Sugerencias Inteligentes")
-            
             grupos_sel = df_seleccion['Asig_Grupo'].unique()
             campus_sel = df_seleccion['Campus'].unique()
             nombres_sel = df_seleccion['Asignatura'].unique()
@@ -290,57 +290,75 @@ else:
             st.markdown("### 📜 Normativa de Primera Vuelta")
             alertas_normativa = []
             
-            familias_evaluadas = set()
+            # Paso 1: Agrupar la selección por familias (Teoría + todos sus Desdobles)
+            familias_evaluadas = {}
             for _, r in df_unicos.iterrows():
                 codigo = r['Código']
                 grupo_str = str(r['Grupo']).strip()
                 h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
                 
+                # Expresión regular que detecta y corta prefijos tipo G1P2 o P1 al final del grupo
+                # Ej: AMG1P2 -> AM | M1P1 -> M1
                 if h_asum > 0:
-                    match_desdoble = re.search(r'^(.*?)(P\d+)$', grupo_str, re.IGNORECASE)
-                    madre = match_desdoble.group(1).strip() if match_desdoble else grupo_str
-                    familias_evaluadas.add((codigo, madre, r['Asignatura']))
+                    madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
+                    clave_familia = f"{codigo}_{madre_calc}"
+                    
+                    if clave_familia not in familias_evaluadas:
+                        familias_evaluadas[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
 
+            def get_max_h(codigo, grupo):
+                match = df_disponibles[(df_disponibles['Código'] == codigo) & (df_disponibles['Grupo'].astype(str).str.strip() == grupo)]
+                if not match.empty: return int(match['Horas_Disponibles'].iloc[0])
+                return 0
+                
             def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
             def is_full(h, H): return H > 0 and h == H
 
-            for codigo, madre, nombre_asig in familias_evaluadas:
-                df_familia = df_disponibles[(df_disponibles['Código'] == codigo)]
-                grupo_teoria = None
-                desdobles = []
+            # Paso 2: Auditar que cada familia cumpla las 3 reglas de oro
+            for clave, info in familias_evaluadas.items():
+                codigo = info['codigo']
+                madre = info['madre']
+                nombre_asig = info['asignatura']
                 
-                for _, r_fam in df_familia.drop_duplicates(subset=['Grupo']).iterrows():
-                    g = str(r_fam['Grupo']).strip()
-                    if g == madre: grupo_teoria = r_fam
-                    elif re.match(rf'^{re.escape(madre)}P\d+$', g, re.IGNORECASE): desdobles.append(r_fam)
-                        
-                if grupo_teoria is not None:
-                    H_T = int(grupo_teoria['Horas_Disponibles'])
-                    h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
-                else:
-                    H_T, h_T = 0, 0
-                    
+                df_asig = df_disponibles[df_disponibles['Código'] == codigo]
+                
+                # Identificar todos los grupos que pertenecen a esta madre (teoría y prácticas)
+                desdobles_disponibles = []
+                for _, r_disp in df_asig.drop_duplicates(subset=['Grupo']).iterrows():
+                    g_disp = str(r_disp['Grupo']).strip()
+                    if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
+                        desdobles_disponibles.append(g_disp)
+                
+                H_T = get_max_h(codigo, madre)
+                h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
+                
                 P_data = []
-                for d in desdobles:
-                    H_p = int(d['Horas_Disponibles'])
-                    h_p = horas_asumidas_dict.get(f"{codigo}_{str(d['Grupo']).strip()}", 0)
-                    P_data.append((str(d['Grupo']).strip(), h_p, H_p))
-                    
-                todo_teoria = is_full(h_T, H_T) if H_T > 0 else True
-                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data)
-                es_todo = todo_teoria and (todo_practicas if P_data else True)
+                for p in desdobles_disponibles:
+                    Hp = get_max_h(codigo, p)
+                    hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
+                    if Hp > 0 or hp > 0:
+                        P_data.append((p, hp, Hp))
                 
-                solo_teoria = is_full(h_T, H_T) and all(hp == 0 for _, hp, Hp in P_data)
+                # Evaluamos los tres escenarios legales
+                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
                 
-                mitad_teoria = is_half(h_T, H_T) if H_T > 0 else True
-                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data)
-                es_mitad = mitad_teoria and (mitad_practicas if P_data else True)
+                es_todo = is_full(h_T, H_T) and todo_practicas
+                solo_teoria = is_full(h_T, H_T) and cero_practicas
+                es_mitad = is_half(h_T, H_T) and mitad_practicas
                 
                 if not (es_todo or solo_teoria or es_mitad):
-                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida. "
-                    detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
-                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                    err_msg += " | ".join(detalles) + ". *Recuerda: O se coge todo (teoría + todas sus prácticas), o sólo la teoría, o exactamente la mitad de todo.*"
+                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
+                    detalles = []
+                    
+                    if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
+                    else: detalles.append(f"Teoría ({madre}): No disponible")
+                    
+                    for gp, hp, Hp in P_data:
+                        detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                        
+                    err_msg += " | ".join(detalles) + ". *Opciones válidas: Coger TODO el paquete, sólo la Teoría completa, o exactamente la MITAD de Teoría + MITAD de todas sus Prácticas.*"
                     alertas_normativa.append(err_msg)
             
             if alertas_normativa:

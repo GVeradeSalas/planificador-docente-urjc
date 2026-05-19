@@ -354,28 +354,36 @@ else:
                     hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
                     if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
                 
-                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
-                
-                es_todo = is_full(h_T, H_T) and todo_practicas
-                solo_teoria = is_full(h_T, H_T) and cero_practicas
-                es_mitad = is_half(h_T, H_T) and mitad_practicas
-                
-                if not (es_todo or solo_teoria or es_mitad):
-                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
-                    detalles = []
-                    if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
-                    else: detalles.append(f"Teoría ({madre}): No disponible")
-                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                    err_msg += " | ".join(detalles) + ". *Opciones válidas: Coger TODO el paquete, sólo la Teoría completa, o exactamente la MITAD de Teoría + MITAD de todas sus Prácticas.*"
+                # --- NUEVA REGLA: ASIGNATURAS DE 70 Y 90 HORAS (DESDOBLE IMPLÍCITO) ---
+                if H_T in [70, 90] and h_T > 60:
+                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (teoría), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                     alertas_normativa.append(err_msg)
+                else:
+                    todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                    mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                    cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+                    
+                    es_todo = is_full(h_T, H_T) and todo_practicas
+                    solo_teoria = is_full(h_T, H_T) and cero_practicas
+                    es_mitad = is_half(h_T, H_T) and mitad_practicas
+                    
+                    # Validar si coge 60h en asig. de 70 o 90h (se considera "Toda la teoría")
+                    es_teoria_oculta = (H_T in [70, 90] and h_T == 60) and cero_practicas
+                    
+                    if not (es_todo or solo_teoria or es_mitad or es_teoria_oculta):
+                        err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
+                        detalles = []
+                        if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
+                        else: detalles.append(f"Teoría ({madre}): No disponible")
+                        for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Coger TODO el paquete, sólo la Teoría completa (o 60h en asignaturas de 70/90h), o exactamente la MITAD de Teoría + MITAD de todas sus Prácticas.*"
+                        alertas_normativa.append(err_msg)
             
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones cumplen con la normativa.")
+                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones cumplen con la normativa y los límites de desdobles ocultos.")
 
             st.markdown("---")
 
@@ -465,7 +473,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Revisión/Cumplimiento de la Normativa")
+            st.markdown("#### 📜 Auditoría de Normativa de Compañero")
             alertas_normativa_prof = []
             
             familias_prof = {}
@@ -511,27 +519,33 @@ else:
                     Hp = get_max_h_ev(codigo, p)
                     hp = get_h_prof(codigo, p)
                     if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
-                        
-                todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
                 
-                es_todo = is_full_p(h_T, H_T) and todo_prac
-                solo_teoria = is_full_p(h_T, H_T) and cero_prac
-                es_mitad = is_half_p(h_T, H_T) and mitad_prac
-                
-                if not (es_todo or solo_teoria or es_mitad):
-                    err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: "
-                    detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
-                    for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                    err_msg += " | ".join(detalles)
+                # --- NUEVA REGLA COMPAÑEROS: ASIGNATURAS DE 70 Y 90 HORAS ---
+                if H_T in [70, 90] and h_T > 60:
+                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (teoría) permitido para un solo docente."
                     alertas_normativa_prof.append(err_msg)
+                else:
+                    todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                    mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                    cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+                    
+                    es_todo = is_full_p(h_T, H_T) and todo_prac
+                    solo_teoria = is_full_p(h_T, H_T) and cero_prac
+                    es_mitad = is_half_p(h_T, H_T) and mitad_prac
+                    es_teoria_oculta = (H_T in [70, 90] and h_T == 60) and cero_prac
+                    
+                    if not (es_todo or solo_teoria or es_mitad or es_teoria_oculta):
+                        err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: "
+                        detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
+                        for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
+                        err_msg += " | ".join(detalles)
+                        alertas_normativa_prof.append(err_msg)
             
             if alertas_normativa_prof:
                 st.warning("⚠️ **Posibles incumplimientos de normativa en el POD de este docente:**")
                 for alerta in alertas_normativa_prof: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta.")
+                st.success("✅ **Auditoría OK:** Las elecciones de este docente cuadran perfectamente con las reglas de 1ª vuelta y límites de 60h.")
             
             st.markdown("---")
             

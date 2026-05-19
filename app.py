@@ -11,9 +11,14 @@ if 'seleccion_asignaturas' not in st.session_state:
     st.session_state['seleccion_asignaturas'] = []
 
 def agregar_asignatura(asig_grupo):
-    """Callback para añadir una asignatura recomendada a la selección actual."""
+    """Añade una asignatura desde las sugerencias."""
     if asig_grupo not in st.session_state['seleccion_asignaturas']:
         st.session_state['seleccion_asignaturas'].append(asig_grupo)
+
+def eliminar_asignatura(asig_grupo):
+    """Elimina una asignatura desde la leyenda interactiva."""
+    if asig_grupo in st.session_state['seleccion_asignaturas']:
+        st.session_state['seleccion_asignaturas'].remove(asig_grupo)
 
 def simplificar_nombre(nombre):
     if pd.isna(nombre):
@@ -142,10 +147,8 @@ else:
     df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
     lista_opciones = sorted(list(df_disponibles['Asig_Grupo'].dropna().unique()))
     
-    # Prevenir errores visuales si se aplican filtros sobre algo ya seleccionado
     st.session_state['seleccion_asignaturas'] = [x for x in st.session_state['seleccion_asignaturas'] if x in lista_opciones]
 
-    # El multiselect ahora se nutre y nutre a st.session_state['seleccion_asignaturas']
     asignaturas_elegidas = st.sidebar.multiselect(
         "Elige los grupos con vacantes:", 
         lista_opciones,
@@ -185,7 +188,6 @@ else:
         if horas_faltantes > 0:
             st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
             
-            # --- MOTOR DE RECOMENDACIONES INTERACTIVO ---
             st.sidebar.markdown("---")
             st.sidebar.subheader("💡 Sugerencias Inteligentes")
             
@@ -237,7 +239,6 @@ else:
                     'Score': score
                 })
             
-            # MOSTRAR RECOMENDACIONES CON BOTONES
             if recomendaciones:
                 recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
                 top_3 = recomendaciones[:3]
@@ -279,6 +280,7 @@ else:
             df_seleccion['Franja Horaria'] = df_seleccion['Hora Inicio'] + " - " + df_seleccion['Hora Fin']
             franjas_ordenadas = sorted(df_seleccion['Franja Horaria'].unique())
             
+            # 1. Dibujamos el Cuadrante (solo con información esencial para no saturar)
             html_cuadrante = "<style>"
             html_cuadrante += ".ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }"
             html_cuadrante += ".ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; }"
@@ -306,6 +308,31 @@ else:
                 html_cuadrante += "</tr>"
             html_cuadrante += "</table>"
             st.markdown(html_cuadrante, unsafe_allow_html=True)
+            
+            # 2. NUEVO: Leyenda Interactiva con botones para eliminar
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("📋 Leyenda y Gestión de Asignaturas")
+            st.write("Consulta los detalles de tus asignaturas en el calendario o elimínalas si ya no las quieres:")
+            
+            for _, r in df_seleccion.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
+                bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
+                
+                # Usamos columnas de Streamlit para alinear la tarjeta de leyenda y el botón
+                col1, col2, col3, col4 = st.columns([0.5, 3.5, 4, 1.5])
+                
+                with col1:
+                    # Muestra el mismo bloque de color que en el calendario
+                    st.markdown(f"<div style='background-color: {bg_color}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']}</span>", unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']}", unsafe_allow_html=True)
+                with col4:
+                    # Este botón llama a la función de eliminar y refresca la app
+                    st.button("❌ Quitar", key=f"del_{r['Asig_Grupo']}", on_click=eliminar_asignatura, args=(r['Asig_Grupo'],))
+                
+                st.markdown("---")
+                
         else:
             st.info("Sin asignaturas seleccionadas.")
 

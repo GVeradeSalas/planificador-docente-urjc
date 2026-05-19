@@ -9,6 +9,10 @@ st.title("Planificador Docente - Análisis de Compatibilidad y Ocupación")
 # --- FUNCIONES AUXILIARES Y ESTADO ---
 if 'seleccion_asignaturas' not in st.session_state:
     st.session_state['seleccion_asignaturas'] = []
+if 'prof_cargado' not in st.session_state:
+    st.session_state['prof_cargado'] = "-- Ninguno --"
+if 'horas_precargadas' not in st.session_state:
+    st.session_state['horas_precargadas'] = {}
 
 def agregar_asignatura(asig_grupo):
     if asig_grupo not in st.session_state['seleccion_asignaturas']:
@@ -27,9 +31,10 @@ def buscar_fuerza_profesor(nombre_pod, df_fuerza):
     nombre_pod_clean = simplificar_nombre(nombre_pod)
     partes_pod = nombre_pod_clean.replace(',', ' ').split()
     
-    for _, row in df_fuerza.iterrows():
+    for idx, row in df_fuerza.iterrows():
         nombre_f_clean = simplificar_nombre(row['Nombre'])
         if all(p in nombre_f_clean for p in partes_pod):
+            row['Original_Index'] = idx  # Guardamos el índice original
             return row
     return None
 
@@ -45,6 +50,10 @@ def generar_fechas_fijas(dia_letra, semestre_str):
         
     fechas = pd.date_range(start=start_date, end=end_date, freq='D')
     return [f.strftime('%d/%m/%y') for f in fechas[fechas.weekday == num_dia]]
+
+def parse_turno(hora_inicio):
+    try: return "Mañana" if int(hora_inicio.split(':')[0]) < 14 else "Tarde"
+    except: return "Desconocido"
 
 @st.cache_data
 def cargar_fuerza_docente(ruta_archivo):
@@ -111,13 +120,15 @@ def cargar_y_procesar(ruta_archivo):
         for prof_nombre, prof_horas in lista_profs:
             for match in re.findall(patron_con_fechas, horario_str):
                 dia, hora_inicio, hora_fin, fechas_str = match
+                turno = parse_turno(hora_inicio.strip())
                 for fecha in [f.strip() for f in fechas_str.split(',')]:
-                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
 
             for match in re.findall(patron_fijo, horario_str):
                 dia, hora_inicio, hora_fin = match
+                turno = parse_turno(hora_inicio.strip())
                 for fecha in generar_fechas_fijas(dia, semestre_actual):
-                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
+                    eventos.append({'Código': codigo_raw, 'Asignatura': str(row.get('Nombre Asignatura', 'Desconocido')).replace('"', ''), 'Titulación': row.get('Titulación', 'Desconocido'), 'Campus': row.get('Campus', 'Desconocido'), 'Semestre': semestre_actual, 'Turno': turno, 'Horas_Totales': horas_totales, 'Horas_Profesor': prof_horas, 'Horas_Disponibles': horas_disponibles, 'Profesor_Original': prof_nombre, 'Estado_Ocupacion': estado_ocupacion, 'Grupo': row.get('Grupo', 'Desconocido'), 'Día': dia.strip(), 'Fecha_str': fecha, 'Hora Inicio': hora_inicio.strip(), 'Hora Fin': hora_fin.strip()})
                 
     df_eventos = pd.DataFrame(eventos)
     if not df_eventos.empty: df_eventos['Fecha_Obj'] = pd.to_datetime(df_eventos['Fecha_str'], format='%d/%m/%y', errors='coerce')
@@ -135,26 +146,66 @@ if st.sidebar.button("🔄 Actualizar Datos del Excel"):
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
 else:
-    st.sidebar.header("1. Filtra por Campus")
+    lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
+    
+    # 0. CARGAR PERFIL
+    st.sidebar.header("0. 🧑‍🏫 Cargar Perfil (2ª Vuelta)")
+    idx_prof = lista_profesores.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores else 0
+    prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil para cargar tus horas:", ["-- Ninguno --"] + lista_profesores, index=idx_prof)
+    
+    if prof_a_cargar != st.session_state['prof_cargado']:
+        st.session_state['prof_cargado'] = prof_a_cargar
+        if prof_a_cargar != "-- Ninguno --":
+            df_prof_load = df_eventos[df_eventos['Profesor_Original'] == prof_a_cargar].drop_duplicates(subset=['Código', 'Grupo'])
+            df_prof_load['Asig_Grupo'] = "[" + df_prof_load['Código'] + "] " + df_prof_load['Asignatura'] + " (" + df_prof_load['Grupo'].astype(str) + ") | " + df_prof_load['Estado_Ocupacion']
+            st.session_state['seleccion_asignaturas'] = df_prof_load['Asig_Grupo'].tolist()
+            st.session_state['horas_precargadas'] = {f"{r['Código']}_{r['Grupo']}": int(r['Horas_Profesor']) for _, r in df_prof_load.iterrows()}
+        else:
+            st.session_state['seleccion_asignaturas'] = []
+            st.session_state['horas_precargadas'] = {}
+        st.rerun()
+
+    # 1. FILTROS PRINCIPALES
+    st.sidebar.header("1. 🎯 Filtros Principales")
     lista_campus = list(df_eventos['Campus'].dropna().unique())
-    campus_elegidos = st.sidebar.multiselect("Selecciona Campus:", lista_campus, default=['MOSTOLES'] if 'MOSTOLES' in lista_campus else [])
+    campus_elegidos = st.sidebar.multiselect("Campus:", lista_campus, default=['MOSTOLES'] if 'MOSTOLES' in lista_campus else [])
     df_f1 = df_eventos[df_eventos['Campus'].isin(campus_elegidos)] if campus_elegidos else df_eventos
 
-    st.sidebar.header("2. Filtra por Semestre")
-    semestres_elegidos = st.sidebar.multiselect("Selecciona semestre(s):", sorted(list(df_f1['Semestre'].dropna().unique())))
+    semestres_elegidos = st.sidebar.multiselect("Semestre(s):", sorted(list(df_f1['Semestre'].dropna().unique())))
     df_f2 = df_f1[df_f1['Semestre'].isin(semestres_elegidos)] if semestres_elegidos else df_f1
 
-    st.sidebar.header("3. Filtra por Titulación")
-    titulaciones_elegidas = st.sidebar.multiselect("Selecciona titulaciones:", sorted(list(df_f2['Titulación'].dropna().unique())))
+    titulaciones_elegidas = st.sidebar.multiselect("Titulaciones:", sorted(list(df_f2['Titulación'].dropna().unique())))
     df_f3 = df_f2[df_f2['Titulación'].isin(titulaciones_elegidas)] if titulaciones_elegidas else df_f2
 
-    st.sidebar.header("4. Selecciona Asignaturas")
-    df_disponibles = df_f3[df_f3['Horas_Disponibles'] > 0].copy()
-    df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
-    lista_opciones = sorted(list(df_disponibles['Asig_Grupo'].dropna().unique()))
+    # 2. FILTROS DE HORARIO Y DISPONIBILIDAD
+    st.sidebar.header("2. ⏱️ Filtros y Disponibilidad")
+    turnos_disp = sorted(list(df_f3['Turno'].dropna().unique()))
+    turnos_elegidos = st.sidebar.multiselect("Turno (Mañana/Tarde):", turnos_disp, default=turnos_disp)
+    df_f4 = df_f3[df_f3['Turno'].isin(turnos_elegidos)] if turnos_elegidos else df_f3
+
+    ocultar_compartidas = st.sidebar.checkbox("Ocultar asignaturas compartidas (ya empezadas)")
+    if ocultar_compartidas:
+        # Mantenemos las que no tienen profesor O las que pertenecen al perfil actualmente cargado
+        df_f4 = df_f4[(df_f4['Profesor_Original'] == 'Ninguno') | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])]
+
+    # 3. EXCLUIR ASIGNATURAS
+    st.sidebar.header("3. 🚫 Excluir Asignaturas")
+    asignaturas_nombres = sorted(list(df_f4['Asignatura'].dropna().unique()))
+    evitar_asig = st.sidebar.multiselect("Selecciona nombres a evitar:", asignaturas_nombres)
+    if evitar_asig:
+        df_f4 = df_f4[~df_f4['Asignatura'].isin(evitar_asig)]
+
+    # 4. SELECCIÓN DE ASIGNATURAS
+    st.sidebar.header("4. 📋 Seleccionar Asignaturas")
+    mask_disp = (df_f4['Horas_Disponibles'] > 0) | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])
+    df_disponibles = df_f4[mask_disp].copy()
     
+    df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'] + "] " + df_disponibles['Asignatura'] + " (" + df_disponibles['Grupo'].astype(str) + ") | " + df_disponibles['Estado_Ocupacion']
+    lista_opciones = sorted(list(df_disponibles.drop_duplicates(subset=['Código', 'Grupo'])['Asig_Grupo'].dropna().unique()))
+    
+    # Limpiamos seleccionados que ya no estén en la lista
     st.session_state['seleccion_asignaturas'] = [x for x in st.session_state['seleccion_asignaturas'] if x in lista_opciones]
-    asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos con vacantes:", lista_opciones, key='seleccion_asignaturas')
+    asignaturas_elegidas = st.sidebar.multiselect("Elige los grupos:", lista_opciones, key='seleccion_asignaturas')
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
 
@@ -167,9 +218,14 @@ else:
         
         horas_asumidas_dict = {}
         for _, r in df_unicos.iterrows():
-            max_h = int(r['Horas_Disponibles'])
+            max_h_disp = int(r['Horas_Disponibles'])
             clave_id = f"{r['Código']}_{r['Grupo']}"
-            horas_asumidas_dict[clave_id] = st.sidebar.slider(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})", 0, max_h, max_h, 1, key=f"sl_{clave_id}")
+            h_actual = st.session_state.get('horas_precargadas', {}).get(clave_id, 0)
+            
+            max_slider = max_h_disp + h_actual
+            default_val = h_actual if h_actual > 0 else max_slider
+            
+            horas_asumidas_dict[clave_id] = st.sidebar.slider(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})", 0, max_slider, default_val, 1, key=f"sl_{clave_id}")
             
         horas_totales_asumidas = sum(horas_asumidas_dict.values())
         
@@ -243,12 +299,11 @@ else:
             st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
     else:
         df_seleccion = pd.DataFrame()
-        st.sidebar.info("👈 Selecciona asignaturas para iniciar tu planificación.")
+        st.sidebar.info("👈 Selecciona asignaturas en el menú lateral.")
 
     mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_eventos['Código'].unique())}
 
-    # --- PESTAÑAS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⏰ Horario Semanal", "📅 Calendario", "📊 Análisis de Conflictos", "🧑‍🏫 Compañeros", "📈 Estado Global"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["⏰ Horario Semanal", "📅 Calendario", "📊 Análisis de Conflictos", "🧑‍🏫 Revisión de Compañeros", "📈 Estado Global"])
     
     with tab1:
         if not df_seleccion.empty:
@@ -278,7 +333,7 @@ else:
                 col1, col2, col3, col4 = st.columns([0.5, 3.5, 4, 1.5])
                 with col1: st.markdown(f"<div style='background-color: {mapa_colores.get(r['Código'])}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
                 with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
-                with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']}", unsafe_allow_html=True)
+                with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
                 with col4: st.button("❌ Quitar", key=f"del_{r['Asig_Grupo']}", on_click=eliminar_asignatura, args=(r['Asig_Grupo'],))
                 st.markdown("---")
         else:
@@ -311,7 +366,7 @@ else:
         if not df_seleccion.empty:
             
             # --- 1. AUDITORÍA DE NORMATIVA (1ª VUELTA) ---
-            st.markdown("### 📜 Normativa de Primera Vuelta")
+            st.markdown("### 📜 Cumplimiento de Normativa (1ª Vuelta)")
             alertas_normativa = []
             
             familias_evaluadas = {}
@@ -327,8 +382,8 @@ else:
                         familias_evaluadas[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
 
             def get_max_h(codigo, grupo):
-                match = df_disponibles[(df_disponibles['Código'] == codigo) & (df_disponibles['Grupo'].astype(str).str.strip() == grupo)]
-                if not match.empty: return int(match['Horas_Disponibles'].iloc[0])
+                match = df_eventos[(df_eventos['Código'] == codigo) & (df_eventos['Grupo'].astype(str).str.strip() == grupo)]
+                if not match.empty: return int(match['Horas_Totales'].iloc[0])
                 return 0
                 
             def is_half(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
@@ -339,44 +394,54 @@ else:
                 madre = info['madre']
                 nombre_asig = info['asignatura']
                 
-                df_asig = df_disponibles[df_disponibles['Código'] == codigo]
-                desdobles_disponibles = []
-                for _, r_disp in df_asig.drop_duplicates(subset=['Grupo']).iterrows():
+                df_asig_full = df_eventos[df_eventos['Código'] == codigo]
+                desdobles_disp = []
+                for _, r_disp in df_asig_full.drop_duplicates(subset=['Grupo']).iterrows():
                     g_disp = str(r_disp['Grupo']).strip()
                     if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
-                        desdobles_disponibles.append(g_disp)
+                        desdobles_disp.append(g_disp)
                 
                 H_T = get_max_h(codigo, madre)
                 h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
                 
                 P_data = []
-                for p in desdobles_disponibles:
+                for p in desdobles_disp:
                     Hp = get_max_h(codigo, p)
                     hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
                     if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
                 
-                # --- NUEVA REGLA: ASIGNATURAS DE 70 Y 90 HORAS (DESDOBLE IMPLÍCITO) ---
+                num_prac_full = sum(1 for _, hp, Hp in P_data if is_full(hp, Hp))
+                num_prac_cero = sum(1 for _, hp, Hp in P_data if hp == 0)
+                
+                todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+                
+                es_todo = is_full(h_T, H_T) and todo_practicas
+                es_mitad = is_half(h_T, H_T) and mitad_practicas
+                
+                teoria_y_un_desdoble = False
+                if is_full(h_T, H_T) and len(P_data) > 0:
+                    if num_prac_full == 1 and num_prac_cero == len(P_data) - 1:
+                        teoria_y_un_desdoble = True
+
+                es_teoria_oculta = False
+                es_resto_teoria_oculta = False
+                if H_T in [70, 90]:
+                    if h_T == 60 and cero_practicas: es_teoria_oculta = True
+                    if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
+                
                 if H_T in [70, 90] and h_T > 60:
                     err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de 70 y 90 horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (teoría), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                     alertas_normativa.append(err_msg)
                 else:
-                    todo_practicas = all(is_full(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                    mitad_practicas = all(is_half(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                    cero_practicas = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
-                    
-                    es_todo = is_full(h_T, H_T) and todo_practicas
-                    solo_teoria = is_full(h_T, H_T) and cero_practicas
-                    es_mitad = is_half(h_T, H_T) and mitad_practicas
-                    
-                    es_teoria_oculta = (H_T in [70, 90] and h_T == 60) and cero_practicas
-                    
-                    if not (es_todo or solo_teoria or es_mitad or es_teoria_oculta):
+                    if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
                         err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: Selección inválida o desbalanceada. "
                         detalles = []
                         if H_T > 0 or h_T > 0: detalles.append(f"Teoría ({madre}): {h_T}/{H_T}h")
                         else: detalles.append(f"Teoría ({madre}): No disponible")
                         for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Coger TODO el paquete, sólo la Teoría completa (o 60h en asignaturas de 70/90h), o exactamente la MITAD de Teoría + MITAD de todas sus Prácticas.*"
+                        err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles. (Asig. 70/90h: Max 60h o el resto).*"
                         alertas_normativa.append(err_msg)
             
             if alertas_normativa:
@@ -428,7 +493,7 @@ else:
             st.info("Sin asignaturas seleccionadas.")
 
     with tab4:
-        st.subheader("Buscador de Horarios de Compañeros")
+        st.subheader("Buscador y Revisión de Horarios de Compañeros")
         lista_profesores = sorted([p for p in df_eventos['Profesor_Original'].unique() if p != "Ninguno"])
         prof_buscado = st.selectbox("Selecciona un profesor/a para ver su carga docente:", ["-- Seleccionar --"] + lista_profesores)
         
@@ -473,7 +538,7 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            st.markdown("#### 📜 Revisión/Cumplimiento de la Normativa")
+            st.markdown("#### 📜 Cumplimiento de la Normativa del Compañero")
             alertas_normativa_prof = []
             
             familias_prof = {}
@@ -520,20 +585,32 @@ else:
                     hp = get_h_prof(codigo, p)
                     if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
                 
+                num_prac_full = sum(1 for _, hp, Hp in P_data if is_full_p(hp, Hp))
+                num_prac_cero = sum(1 for _, hp, Hp in P_data if hp == 0)
+                
+                todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
+                cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
+                
+                es_todo = is_full_p(h_T, H_T) and todo_prac
+                es_mitad = is_half_p(h_T, H_T) and mitad_prac
+                
+                teoria_y_un_desdoble = False
+                if is_full_p(h_T, H_T) and len(P_data) > 0:
+                    if num_prac_full == 1 and num_prac_cero == len(P_data) - 1:
+                        teoria_y_un_desdoble = True
+
+                es_teoria_oculta = False
+                es_resto_teoria_oculta = False
+                if H_T in [70, 90]:
+                    if h_T == 60 and cero_prac: es_teoria_oculta = True
+                    if h_T == (H_T - 60) and cero_prac: es_resto_teoria_oculta = True
+
                 if H_T in [70, 90] and h_T > 60:
                     err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (teoría) permitido para un solo docente."
                     alertas_normativa_prof.append(err_msg)
                 else:
-                    todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                    mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                    cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
-                    
-                    es_todo = is_full_p(h_T, H_T) and todo_prac
-                    solo_teoria = is_full_p(h_T, H_T) and cero_prac
-                    es_mitad = is_half_p(h_T, H_T) and mitad_prac
-                    es_teoria_oculta = (H_T in [70, 90] and h_T == 60) and cero_prac
-                    
-                    if not (es_todo or solo_teoria or es_mitad or es_teoria_oculta):
+                    if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
                         err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: "
                         detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
                         for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
@@ -569,11 +646,9 @@ else:
         else:
             st.info("Utiliza el desplegable para buscar el horario y estado del POD de un compañero.")
 
-    # --- NUEVA PESTAÑA 5: ESTADO GLOBAL DEL ÁREA ---
     with tab5:
         st.subheader("📈 Estado Global de la Elección de POD")
         
-        # 1. Cálculos de métricas globales del departamento
         df_unicos_global = df_eventos.drop_duplicates(subset=['Código', 'Grupo'])
         total_horas_area = df_unicos_global['Horas_Totales'].sum()
         
@@ -582,27 +657,32 @@ else:
         
         total_vacantes = df_unicos_global['Horas_Disponibles'].sum()
         
+        balance = total_asignadas - total_horas_area
+        signo_balance = "+" if balance > 0 else ""
+        
         pct_global = (total_asignadas / total_horas_area) * 100 if total_horas_area > 0 else 0
         
-        # Renderizamos los KPIs superiores
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("📚 Horas Totales Área", f"{total_horas_area} h")
         col2.metric("🧑‍🏫 Horas Asignadas", f"{total_asignadas} h")
-        col3.metric("🪑 Horas Vacantes", f"{total_vacantes} h")
+        col3.metric("⚖️ Balance de Elección", f"{balance} h", delta=f"{signo_balance}{balance} h respecto a Total Área", delta_color="normal" if balance >= 0 else "inverse")
         col4.metric("📊 Progreso Global", f"{pct_global:.1f} %")
         
         st.progress(min(total_asignadas / total_horas_area, 1.0) if total_horas_area > 0 else 0.0)
         
         st.markdown("---")
-        st.markdown("#### 🧑‍🏫 Progreso Individual de Profesores")
+        st.markdown("#### 🧑‍🏫 Progreso y Turno de Profesores")
         
-        # 2. Generamos la tabla con barras de progreso individuales
         datos_profs = []
         horas_por_prof = df_unicos_prof[df_unicos_prof['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
         profs_procesados = set()
         
         if not df_fuerza.empty and 'Nombre' in df_fuerza.columns:
-            for _, row_f in df_fuerza.iterrows():
+            # Para mantener el orden original, creamos un iterador con índice
+            df_fuerza_ordenado = df_fuerza.copy()
+            df_fuerza_ordenado['Index_Orig'] = range(len(df_fuerza_ordenado))
+            
+            for _, row_f in df_fuerza_ordenado.iterrows():
                 nom_f = row_f['Nombre']
                 if pd.isna(nom_f): continue
                 
@@ -617,35 +697,58 @@ else:
                         profs_procesados.add(nom_pod)
                         
                 pct = min(h_asig / fuerza, 1.0) if fuerza > 0 else 0.0
-                estado_texto = "Completado ✅" if h_asig >= fuerza else "En curso ⏳"
+                is_finished = pct >= 1.0 or (fuerza - h_asig) <= 8
                 
                 datos_profs.append({
+                    'Original_Index': row_f['Index_Orig'],
+                    'Is_Finished': is_finished,
                     'Profesor': nom_f,
                     'Horas Asignadas': h_asig,
                     'Objetivo (Fuerza)': fuerza,
                     'Progreso %': round((h_asig / fuerza) * 100, 1) if fuerza > 0 else 0.0,
                     'Ratio': pct,
-                    'Estado': estado_texto
+                    'Estado': "" 
                 })
         
-        # Incorporamos a cualquier profesor que haya pillado horas pero no estuviera en el excel de Fuerza Docente
+        # Incorporamos a cualquier profesor que no estuviera en Fuerza Docente
         for nom_pod, h in horas_por_prof.items():
             if nom_pod not in profs_procesados:
-                fuerza = 240 # Valor por defecto si no están en el Excel de recursos humanos
+                fuerza = 240 
                 pct = min(h / fuerza, 1.0)
-                estado_texto = "Completado ✅" if h >= fuerza else "En curso ⏳"
+                is_finished = h >= fuerza
                 datos_profs.append({
+                    'Original_Index': 9999, # Al final de todo
+                    'Is_Finished': is_finished,
                     'Profesor': f"{nom_pod} (No en Excel Fuerza)",
                     'Horas Asignadas': h,
                     'Objetivo (Fuerza)': fuerza,
                     'Progreso %': round((h / fuerza) * 100, 1),
                     'Ratio': pct,
-                    'Estado': estado_texto
+                    'Estado': ""
                 })
         
-        # 3. Dibujamos la tabla mágica con Streamlit Dataframe Configuration
         if datos_profs:
-            df_resumen = pd.DataFrame(datos_profs).sort_values('Progreso %', ascending=False)
+            # Ordenamos: Primero los que NO han acabado, y dentro de ellos el orden original.
+            # Luego los que SÍ han acabado, y dentro de ellos el orden original.
+            sorted_profs = sorted(datos_profs, key=lambda x: (x['Is_Finished'], x['Original_Index']))
+            
+            # Marcamos al siguiente que le toca elegir
+            found_next = False
+            for p in sorted_profs:
+                if not p['Is_Finished'] and not found_next:
+                    p['Estado'] = "👉 LE TOCA ELEGIR"
+                    found_next = True
+                elif p['Is_Finished']:
+                    p['Estado'] = "Completado ✅"
+                else:
+                    p['Estado'] = "En espera ⏳"
+            
+            # Limpiamos las columnas de ordenación auxiliares para mostrar la tabla
+            for p in sorted_profs:
+                del p['Original_Index']
+                del p['Is_Finished']
+                
+            df_resumen = pd.DataFrame(sorted_profs)
             
             st.dataframe(
                 df_resumen,
@@ -654,14 +757,8 @@ else:
                     "Horas Asignadas": st.column_config.NumberColumn("Horas Asig.", format="%d h"),
                     "Objetivo (Fuerza)": st.column_config.NumberColumn("Fuerza POD", format="%d h"),
                     "Progreso %": st.column_config.NumberColumn("% Completado", format="%.1f %%"),
-                    "Ratio": st.column_config.ProgressColumn(
-                        "Barra de Progreso",
-                        help="Nivel de completitud del POD frente a su objetivo",
-                        format="%.2f",
-                        min_value=0,
-                        max_value=1.0,
-                    ),
-                    "Estado": st.column_config.TextColumn("Estado")
+                    "Ratio": st.column_config.ProgressColumn("Barra de Progreso", format="%.2f", min_value=0, max_value=1.0),
+                    "Estado": st.column_config.TextColumn("Estado / Turno")
                 },
                 use_container_width=True,
                 hide_index=True

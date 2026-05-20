@@ -12,6 +12,8 @@ if 'seleccion_asignaturas' not in st.session_state:
     st.session_state['seleccion_asignaturas'] = []
 if 'prof_cargado' not in st.session_state:
     st.session_state['prof_cargado'] = "-- Ninguno --"
+if 'horas_precargadas' not in st.session_state:
+    st.session_state['horas_precargadas'] = {}
 if 'fuerza_objetivo' not in st.session_state:
     st.session_state['fuerza_objetivo'] = 240
 
@@ -139,6 +141,135 @@ def cargar_y_procesar(ruta_archivo):
     if not df_eventos.empty: df_eventos['Fecha_Obj'] = pd.to_datetime(df_eventos['Fecha_str'], format='%d/%m/%y', errors='coerce')
     return df_eventos
 
+
+# --- MOTOR DE RENDERIZADO DEL CALENDARIO EN BLOQUES ABSOLUTOS ---
+def generar_html_calendario(df_calendario, horas_evaluacion, df_fijas, mapa_colores):
+    START_HOUR = 8
+    END_HOUR = 22
+    TOTAL_HOURS = END_HOUR - START_HOUR
+    PIXELS_PER_HOUR = 60
+    CALENDAR_HEIGHT = TOTAL_HOURS * PIXELS_PER_HOUR
+
+    def time_to_mins(t_str):
+        try:
+            h, m = map(int, t_str.split(':'))
+            return h * 60 + m
+        except:
+            return START_HOUR * 60
+
+    dias_semana = ['L', 'M', 'X', 'J', 'V']
+    nombres_dias = {'L': 'Lunes', 'M': 'Martes', 'X': 'Miércoles', 'J': 'Jueves', 'V': 'Viernes'}
+
+    # Uso de lista para evitar que Streamlit intercepte tabulaciones como bloques de código Markdown
+    lines = []
+    lines.append("<style>")
+    lines.append(".cal-container { display: flex; width: 100%; border: 1px solid #ddd; background: #fff; font-family: sans-serif; margin-bottom: 25px; border-radius: 5px; overflow: hidden; }")
+    lines.append(".cal-yaxis { width: 60px; border-right: 1px solid #ddd; position: relative; background: #fafafa; flex-shrink: 0; }")
+    lines.append(".cal-day { flex: 1; border-right: 1px solid #ddd; position: relative; min-width: 120px; }")
+    lines.append(".cal-day:last-child { border-right: none; }")
+    lines.append(".cal-day-header { text-align: center; font-weight: bold; padding: 8px 0; border-bottom: 1px solid #ddd; background: #f0f2f6; height: 35px; box-sizing: border-box; font-size: 0.85em; color: #31333F; }")
+    lines.append(f".cal-grid {{ position: relative; height: {CALENDAR_HEIGHT}px; }}")
+    lines.append(".cal-grid-line { position: absolute; width: 100%; border-top: 1px dashed #eee; pointer-events: none; }")
+    lines.append(".cal-grid-line-solid { position: absolute; width: 100%; border-top: 1px solid #ddd; pointer-events: none; }")
+    lines.append(".cal-time-label { position: absolute; width: 100%; text-align: center; font-size: 0.75em; color: #666; font-weight: bold; transform: translateY(-50%); }")
+    lines.append(".cal-event { position: absolute; box-sizing: border-box; padding: 6px; border-radius: 4px; border-left: 4px solid rgba(0,0,0,0.3); overflow: hidden; display: flex; flex-direction: column; font-size: 0.7em; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.1); border-top: 1px solid rgba(0,0,0,0.05); border-right: 1px solid rgba(0,0,0,0.05); border-bottom: 1px solid rgba(0,0,0,0.05); transition: transform 0.1s, z-index 0s; z-index: 10; }")
+    lines.append(".cal-event:hover { z-index: 50 !important; transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,0.3); overflow: visible; height: auto !important; min-height: 100%; }")
+    lines.append(".cal-event-time { font-weight: bold; color: #444; margin-bottom: 3px; font-size: 1.1em; }")
+    lines.append(".cal-event-title { font-weight: bold; color: #111; margin-bottom: 3px; white-space: normal; font-size: 1.1em; }")
+    lines.append(".cal-event-group { color: #333; }")
+    lines.append("</style>")
+    
+    lines.append('<div class="cal-container">')
+    lines.append('<div class="cal-yaxis">')
+    lines.append('<div class="cal-day-header" style="border-right: none;">Hora</div>')
+    lines.append('<div class="cal-grid">')
+    
+    for h in range(START_HOUR, END_HOUR + 1):
+        top = (h - START_HOUR) * PIXELS_PER_HOUR
+        if h % 2 != 0:
+            lines.append(f'<div class="cal-time-label" style="top: {top}px;">{h:02d}:00</div>')
+        line_class = "cal-grid-line-solid" if h % 2 != 0 else "cal-grid-line"
+        lines.append(f'<div class="{line_class}" style="top: {top}px;"></div>')
+
+    lines.append('</div></div>')
+
+    for dia in dias_semana:
+        lines.append('<div class="cal-day">')
+        lines.append(f'<div class="cal-day-header">{nombres_dias[dia]}</div>')
+        lines.append('<div class="cal-grid">')
+        
+        for h in range(START_HOUR, END_HOUR + 1):
+            top = (h - START_HOUR) * PIXELS_PER_HOUR
+            line_class = "cal-grid-line-solid" if h % 2 != 0 else "cal-grid-line"
+            lines.append(f'<div class="{line_class}" style="top: {top}px;"></div>')
+
+        evs_dia = df_calendario[df_calendario['Día'] == dia].drop_duplicates(subset=['Código', 'Grupo', 'Hora Inicio']).copy()
+        
+        if not evs_dia.empty:
+            events_list = []
+            for _, r in evs_dia.iterrows():
+                start_m = time_to_mins(r['Hora Inicio'])
+                end_m = time_to_mins(r['Hora Fin'])
+                events_list.append({'start': start_m, 'end': end_m, 'data': r})
+            
+            events_list.sort(key=lambda x: x['start'])
+            
+            clusters = []
+            for ev in events_list:
+                if not clusters:
+                    clusters.append([ev])
+                else:
+                    last_cluster = clusters[-1]
+                    max_end = max(e['end'] for e in last_cluster)
+                    if ev['start'] < max_end:
+                        last_cluster.append(ev)
+                    else:
+                        clusters.append([ev])
+            
+            for cluster in clusters:
+                columns = []
+                for ev in cluster:
+                    placed = False
+                    for col in columns:
+                        if col[-1]['end'] <= ev['start']:
+                            col.append(ev)
+                            placed = True
+                            break
+                    if not placed:
+                        columns.append([ev])
+                
+                num_cols = len(columns)
+                for col_idx, col in enumerate(columns):
+                    for ev in col:
+                        ev['left'] = (col_idx / num_cols) * 100
+                        ev['width'] = (1 / num_cols) * 100
+
+            for ev in events_list:
+                r = ev['data']
+                start_px = (ev['start'] - START_HOUR * 60) * (PIXELS_PER_HOUR / 60)
+                height_px = (ev['end'] - ev['start']) * (PIXELS_PER_HOUR / 60)
+                
+                bg_color = mapa_colores.get(r['Código'], "#E3F2FD")
+                h_asum = horas_evaluacion.get(f"{r['Código']}_{r['Grupo']}", 0)
+                
+                is_inmutable = False
+                if df_fijas is not None and not df_fijas.empty:
+                    is_inmutable = ((df_fijas['Código'] == r['Código']) & (df_fijas['Grupo'] == r['Grupo'])).any()
+                
+                icono = "🔒 " if is_inmutable else "✨ " if df_fijas is not None else ""
+                
+                lines.append(f'<div class="cal-event" style="top: {start_px}px; height: {height_px}px; left: {ev["left"]}%; width: {ev["width"]}%; background-color: {bg_color};">')
+                lines.append(f'<div class="cal-event-time">⏱ {r["Hora Inicio"]} - {r["Hora Fin"]}</div>')
+                lines.append(f'<div class="cal-event-title" title="[{r["Código"]}] {r["Asignatura"]}">{icono}[{r["Código"]}] {r["Asignatura"]}</div>')
+                lines.append(f'<div class="cal-event-group">Gr. {r["Grupo"]} ({h_asum}h)</div>')
+                lines.append('</div>')
+        
+        lines.append('</div></div>')
+
+    lines.append('</div>')
+    return "".join(lines)
+
+
 # --- CARGA ---
 df_eventos = cargar_y_procesar("POD_2026-27_11-5-2026.xlsx")
 df_fuerza = cargar_fuerza_docente("Fuerza Docente.xlsx")
@@ -158,7 +289,6 @@ if st.sidebar.button("🔄 Actualizar Datos del Excel", use_container_width=True
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
 else:
-    # 0. CALCULAR FUERZA Y EXTRAER INMUTABLES
     df_unicos_prof_calc = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
     horas_por_prof_calc = df_unicos_prof_calc[df_unicos_prof_calc['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
     
@@ -182,10 +312,9 @@ else:
     idx_prof = lista_profesores_activos.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores_activos else 0
     prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil:", ["-- Ninguno --"] + lista_profesores_activos, index=idx_prof)
     
-    # Lógica de carga inmutable
     if prof_a_cargar != st.session_state['prof_cargado']:
         st.session_state['prof_cargado'] = prof_a_cargar
-        st.session_state['seleccion_asignaturas'] = []  # Reseteamos las selecciones NUEVAS
+        st.session_state['seleccion_asignaturas'] = [] 
         
         if prof_a_cargar != "-- Ninguno --":
             info_fuerza_cargado = buscar_fuerza_profesor(prof_a_cargar, df_fuerza)
@@ -197,7 +326,6 @@ else:
             st.session_state['fuerza_objetivo'] = 240
         st.rerun()
 
-    # Extraemos la capa inmutable de la persona seleccionada
     df_inmutables = pd.DataFrame()
     df_inmutables_unicos = pd.DataFrame()
     horas_inmutables_total = 0
@@ -247,7 +375,6 @@ else:
     
     strict_mode = st.sidebar.checkbox("🔒 **Modo Estricto:** Ocultar incompatibles", help="Oculta las asignaturas que se solapan con tu elección actual (incluyendo las de tu 1ª vuelta).")
 
-    # Solo disponemos las que tienen vacantes (Horas_Disponibles > 0)
     mask_disp = (df_f4['Horas_Disponibles'] > 0)
     df_disponibles = df_f4[mask_disp].copy()
     
@@ -259,18 +386,15 @@ else:
     
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]
     
-    # Matriz de solapamientos
     busy_dict = {}
     conflictos_exist = False
     
-    # 1. Metemos las horas inmutables al cálculo de solapamientos
     if not df_inmutables.empty:
         for _, r in df_inmutables.iterrows():
             f = r['Fecha_str']
             if f not in busy_dict: busy_dict[f] = []
             busy_dict[f].append((r['Hora Inicio'], r['Hora Fin']))
             
-    # 2. Metemos las nuevas horas seleccionadas
     if sel_actual:
         df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(sel_actual)]
         for _, r in df_sel_temp.iterrows():
@@ -352,7 +476,7 @@ else:
         st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
         if not strict_mode:
             st.sidebar.markdown("---")
-            st.sidebar.subheader("💡 Sugerencias")
+            st.sidebar.subheader("💡 Sugerencias Inteligentes")
             grupos_sel = df_seleccion['Asig_Grupo_ID'].unique() if not df_seleccion.empty else []
             campus_sel = df_seleccion['Campus'].unique() if not df_seleccion.empty else []
             nombres_sel = df_seleccion['Asignatura'].unique() if not df_seleccion.empty else []
@@ -384,10 +508,10 @@ else:
                 st.sidebar.caption("Opciones compatibles listas para añadir:")
                 for rec in top_3:
                     st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-                if top_10:
-                    with st.sidebar.expander("Ver más sugerencias (Top 10)"):
-                        for rec in top_10:
-                            st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
+            if top_10:
+                with st.sidebar.expander("Ver más sugerencias (Top 10)"):
+                    for rec in top_10:
+                        st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
     else:
         st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
 
@@ -476,7 +600,7 @@ else:
                 if h_T == (H_T - 60) and cero_practicas: es_resto_teoria_oculta = True
             
             if H_T in [70, 90] and h_T > 60:
-                err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de {H_T} horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h, las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
+                err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Has seleccionado {h_T}h de {H_T}h. Las asignaturas de {H_T} horas tienen desdobles implícitos. Lo máximo que puede coger un profesor son 60h (50h teoría + 10h desdobles), las {H_T - 60}h restantes deben ser obligatoriamente para un segundo profesor."
                 alertas_normativa.append(err_msg)
             else:
                 if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
@@ -555,22 +679,8 @@ else:
             for semestre in sorted(df_union['Semestre'].astype(str).unique()):
                 st.markdown(f"#### 📅 {semestre.upper()}")
                 df_sem = df_union[df_union['Semestre'] == semestre].copy()
-                df_sem['Franja Horaria'] = df_sem['Hora Inicio'] + " - " + df_sem['Hora Fin']
-                
-                html = "<style>.ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; margin-bottom: 25px; } .ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; } .ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; } .hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; } .card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); } .card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; } .card-i { color: #555; }</style><table class='ht'><tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
-                
-                for franja in sorted(df_sem['Franja Horaria'].unique()):
-                    html += f"<tr><td class='hc'>{franja}</td>"
-                    for dia in ['L', 'M', 'X', 'J', 'V']:
-                        html += "<td>"
-                        for _, r in df_sem[(df_sem['Franja Horaria'] == franja) & (df_sem['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-                            bg = mapa_colores.get(r['Código'], "#E3F2FD")
-                            h_asum = horas_evaluacion.get(f"{r['Código']}_{r['Grupo']}", 0)
-                            icono = "🔒 " if r.get('Es_Inmutable', False) else "✨ "
-                            html += f"<div class='card-min' style='background-color: {bg};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>{icono}[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({h_asum}h)</div></div>"
-                        html += "</td>"
-                    html += "</tr>"
-                st.markdown(html + "</table>", unsafe_allow_html=True)
+                html_calendario = generar_html_calendario(df_sem, horas_evaluacion, df_inmutables, mapa_colores)
+                st.markdown(html_calendario, unsafe_allow_html=True)
             
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("📋 Leyenda y Gestión de Asignaturas")
@@ -601,26 +711,29 @@ else:
             semanas_ordenadas = sorted(df_union['Lunes_Semana'].dropna().unique())
             dias_activos = [d for d in ['L', 'M', 'X', 'J', 'V', 'S', 'D'] if d in df_union['Día'].values]
             
-            html = "<style>.scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; } .ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; } .ht-crono th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1); } .ht-crono td { border: 1px solid #ddd; padding: 4px; vertical-align: top; background-color: #ffffff; } .hc-sem { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; z-index: 11; } .badge-hora { font-weight: bold; color: #111; font-size: 0.85em; margin-bottom: 3px; border-bottom: 1px dotted rgba(0,0,0,0.2); padding-bottom: 2px; }</style><div class='scroll-crono'><table class='ht-crono'><tr><th class='hc-sem'>Semana</th>"
-            for d in dias_activos: html += f"<th>{d}</th>"
-            html += "</tr>"
+            html_lines = []
+            html_lines.append("<style>.scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; } .ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; } .ht-crono th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1); } .ht-crono td { border: 1px solid #ddd; padding: 4px; vertical-align: top; background-color: #ffffff; } .hc-sem { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; z-index: 11; } .badge-hora { font-weight: bold; color: #111; font-size: 0.85em; margin-bottom: 3px; border-bottom: 1px dotted rgba(0,0,0,0.2); padding-bottom: 2px; }</style>")
+            html_lines.append("<div class='scroll-crono'><table class='ht-crono'><tr><th class='hc-sem'>Semana</th>")
+            for d in dias_activos: html_lines.append(f"<th>{d}</th>")
+            html_lines.append("</tr>")
             
             for semana in semanas_ordenadas:
-                html += f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>"
+                html_lines.append(f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>")
                 for dia in dias_activos:
-                    html += "<td>"
+                    html_lines.append("<td>")
                     for _, r in df_union[(df_union['Lunes_Semana'] == semana) & (df_union['Día'] == dia)].sort_values('Hora Inicio').iterrows():
-                        html += f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>"
-                    html += "</td>"
-                html += "</tr>"
-            st.markdown(html + "</table></div>", unsafe_allow_html=True)
+                        html_lines.append(f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>")
+                    html_lines.append("</td>")
+                html_lines.append("</tr>")
+            html_lines.append("</table></div>")
+            st.markdown("".join(html_lines), unsafe_allow_html=True)
         else:
             st.info("Sin asignaturas seleccionadas.")
 
     with tab3:
         st.subheader("Análisis de Solapamientos, Desplazamientos y Normativa")
         if not df_union.empty:
-            st.markdown("### 📜 Cumplimiento de Normativa de 1ª vuelta")
+            st.markdown("### 📜 Cumplimiento de Normativa")
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")
@@ -691,106 +804,25 @@ else:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            alertas_normativa_prof = []
-            familias_prof = {}
-            for _, r in df_prof_unicos.iterrows():
-                codigo = r['Código']
-                grupo_str = str(r['Grupo']).strip()
-                h_prof = int(r['Horas_Profesor'])
-                
-                if h_prof > 0:
-                    madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
-                    clave_familia = f"{codigo}_{madre_calc}"
-                    if clave_familia not in familias_prof:
-                        familias_prof[clave_familia] = {'codigo': codigo, 'madre': madre_calc, 'asignatura': r['Asignatura']}
-
-            def get_max_h_ev(codigo, grupo):
-                match = df_eventos[(df_eventos['Código'] == codigo) & (df_eventos['Grupo'].astype(str).str.strip() == grupo)]
-                if not match.empty: return int(match['Horas_Totales'].iloc[0])
-                return 0
-                
-            def get_h_prof(codigo, grupo):
-                match = df_prof_unicos[(df_prof_unicos['Código'] == codigo) & (df_prof_unicos['Grupo'].astype(str).str.strip() == grupo)]
-                if not match.empty: return int(match['Horas_Profesor'].iloc[0])
-                return 0
-
-            def is_half_p(h, H): return H > 0 and (h == H // 2 or h == (H + 1) // 2)
-            def is_full_p(h, H): return H > 0 and h == H
-
-            for clave, info in familias_prof.items():
-                codigo, madre, nombre_asig = info['codigo'], info['madre'], info['asignatura']
-                df_asig_ev = df_eventos[df_eventos['Código'] == codigo]
-                
-                desdobles_disp = []
-                for _, r_disp in df_asig_ev.drop_duplicates(subset=['Grupo']).iterrows():
-                    g_disp = str(r_disp['Grupo']).strip()
-                    if g_disp != madre and re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', g_disp, flags=re.IGNORECASE).strip() == madre:
-                        desdobles_disp.append(g_disp)
-                        
-                H_T = get_max_h_ev(codigo, madre)
-                h_T = get_h_prof(codigo, madre)
-                
-                P_data = []
-                for p in desdobles_disp:
-                    Hp = get_max_h_ev(codigo, p)
-                    hp = get_h_prof(codigo, p)
-                    if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
-                
-                num_prac_full = sum(1 for _, hp, Hp in P_data if is_full_p(hp, Hp))
-                num_prac_cero = sum(1 for _, hp, Hp in P_data if hp == 0)
-                
-                todo_prac = all(is_full_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                mitad_prac = all(is_half_p(hp, Hp) for _, hp, Hp in P_data) if P_data else True
-                cero_prac = all(hp == 0 for _, hp, Hp in P_data) if P_data else True
-                
-                es_todo = is_full_p(h_T, H_T) and todo_prac
-                es_mitad = is_half_p(h_T, H_T) and mitad_prac
-                
-                teoria_y_un_desdoble = False
-                if is_full_p(h_T, H_T) and len(P_data) > 0:
-                    if num_prac_full == 1 and num_prac_cero == len(P_data) - 1:
-                        teoria_y_un_desdoble = True
-
-                es_teoria_oculta = False
-                es_resto_teoria_oculta = False
-                if H_T in [70, 90]:
-                    if h_T == 60 and cero_prac: es_teoria_oculta = True
-                    if h_T == (H_T - 60) and cero_prac: es_resto_teoria_oculta = True
-
-                if H_T in [70, 90] and h_T > 60:
-                    err_msg = f"**[{codigo}] {nombre_asig} ({madre})**: Tiene {h_T}h de {H_T}h asignadas. Al ser una asignatura de {H_T}h, tiene un desdoble implícito y supera el máximo legal de 60h (50h teoría + 10h desdobles) permitido para un solo docente."
-                    alertas_normativa_prof.append(err_msg)
-                else:
-                    if not (es_todo or es_mitad or teoria_y_un_desdoble or es_teoria_oculta or es_resto_teoria_oculta):
-                        err_msg = f"**[{codigo}] {nombre_asig} (Familia {madre})**: "
-                        detalles = [f"Teoría ({madre}): {h_T}/{H_T}h"]
-                        for gp, hp, Hp in P_data: detalles.append(f"Práctica ({gp}): {hp}/{Hp}h")
-                        err_msg += " | ".join(detalles)
-                        alertas_normativa_prof.append(err_msg)
-            
-            if alertas_normativa_prof:
-                st.markdown("#### 📌 Revisión de selección")
-                for alerta in alertas_normativa_prof: st.write(f"- {alerta}")
-            
-            st.markdown("---")
             st.markdown("#### 📅 Cuadrante Semanal del Compañero")
             for semestre in sorted(df_prof['Semestre'].astype(str).unique()):
                 st.markdown(f"##### {semestre.upper()}")
                 df_sem_prof = df_prof[df_prof['Semestre'] == semestre].copy()
-                df_sem_prof['Franja Horaria'] = df_sem_prof['Hora Inicio'] + " - " + df_sem_prof['Hora Fin']
+                horas_prof_eval = {f"{r['Código']}_{r['Grupo']}": int(r['Horas_Profesor']) for _, r in df_sem_prof.drop_duplicates(subset=['Código', 'Grupo']).iterrows()}
+                html_calendario_prof = generar_html_calendario(df_sem_prof, horas_prof_eval, None, mapa_colores)
+                st.markdown(html_calendario_prof, unsafe_allow_html=True)
                 
-                html_prof = "<style>.ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; margin-bottom: 20px;} .ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; } .ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; } .hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; } .card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }</style><table class='ht'><tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
-                
-                for franja in sorted(df_sem_prof['Franja Horaria'].unique()):
-                    html_prof += f"<tr><td class='hc'>{franja}</td>"
-                    for dia in ['L', 'M', 'X', 'J', 'V']:
-                        html_prof += "<td>"
-                        for _, r in df_sem_prof[(df_sem_prof['Franja Horaria'] == franja) & (df_sem_prof['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-                            bg = paleta[abs(hash(r['Código'])) % len(paleta)]
-                            html_prof += f"<div class='card-min' style='background-color: {bg};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({r['Horas_Profesor']}h)</div></div>"
-                        html_prof += "</td>"
-                    html_prof += "</tr>"
-                st.markdown(html_prof + "</table>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("📋 Leyenda de Asignaturas del Docente")
+            
+            df_leyenda_prof = df_prof.drop_duplicates(subset=['Código', 'Grupo']).copy()
+            for _, r in df_leyenda_prof.iterrows():
+                bg = mapa_colores.get(r['Código'], "#E3F2FD")
+                col1, col2, col3 = st.columns([0.5, 4.5, 5])
+                with col1: st.markdown(f"<div style='background-color: {bg}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
+                with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
+                with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
+                st.markdown("---")
         else:
             st.info("Utiliza el desplegable para buscar el horario y estado del POD de un compañero.")
 

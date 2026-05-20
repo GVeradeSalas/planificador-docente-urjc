@@ -352,7 +352,7 @@ else:
         st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
         if not strict_mode:
             st.sidebar.markdown("---")
-            st.sidebar.subheader("💡 Sugerencias Inteligentes")
+            st.sidebar.subheader("💡 Sugerencias")
             grupos_sel = df_seleccion['Asig_Grupo_ID'].unique() if not df_seleccion.empty else []
             campus_sel = df_seleccion['Campus'].unique() if not df_seleccion.empty else []
             nombres_sel = df_seleccion['Asignatura'].unique() if not df_seleccion.empty else []

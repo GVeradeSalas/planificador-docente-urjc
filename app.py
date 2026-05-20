@@ -12,18 +12,16 @@ if 'seleccion_asignaturas' not in st.session_state:
     st.session_state['seleccion_asignaturas'] = []
 if 'prof_cargado' not in st.session_state:
     st.session_state['prof_cargado'] = "-- Ninguno --"
-if 'horas_precargadas' not in st.session_state:
-    st.session_state['horas_precargadas'] = {}
 if 'fuerza_objetivo' not in st.session_state:
     st.session_state['fuerza_objetivo'] = 240
 
-def agregar_asignatura(asig_grupo):
-    if asig_grupo not in st.session_state['seleccion_asignaturas']:
-        st.session_state['seleccion_asignaturas'].append(asig_grupo)
+def agregar_asignatura(asig_grupo_id):
+    if asig_grupo_id not in st.session_state['seleccion_asignaturas']:
+        st.session_state['seleccion_asignaturas'].append(asig_grupo_id)
 
-def eliminar_asignatura(asig_grupo):
-    if asig_grupo in st.session_state['seleccion_asignaturas']:
-        st.session_state['seleccion_asignaturas'].remove(asig_grupo)
+def eliminar_asignatura(asig_grupo_id):
+    if asig_grupo_id in st.session_state['seleccion_asignaturas']:
+        st.session_state['seleccion_asignaturas'].remove(asig_grupo_id)
 
 def simplificar_nombre(nombre):
     if pd.isna(nombre): return ""
@@ -72,7 +70,6 @@ def cargar_y_procesar(ruta_archivo):
     patron_con_fechas = r'([LMXJVSD])=>\((.*?)-(.*?)\)\[(.*?)\]'
     patron_fijo = r'([LMXJVSD])(?:=>)?\s*\(\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*\)(?!\[)'
     
-    # Busca dinámicamente columnas de profesores (Profesores, Profesores 2, Profesores 3...)
     prof_cols = [c for c in df_crudo.columns if 'profesor' in str(c).lower()]
     
     for index, row in df_crudo.dropna(subset=['Horario']).iterrows():
@@ -87,11 +84,9 @@ def cargar_y_procesar(ruta_archivo):
         horas_ocupadas = 0
         nombres_desc = []
         
-        # Procesamos todas las columnas de profesores de esa fila
         for col in prof_cols:
             celda_prof = str(row.get(col, '')).strip()
             if celda_prof != '' and celda_prof.lower() not in ['no', 'nan']:
-                # Permite separar si alguien usó comas, "y", "e" o barras dentro de una misma columna
                 segmentos = re.split(r',|\by\b|\be\b|/|\n', celda_prof, flags=re.IGNORECASE)
                 for seg in segmentos:
                     if not seg.strip(): continue
@@ -163,6 +158,7 @@ if st.sidebar.button("🔄 Actualizar Datos del Excel", use_container_width=True
 if df_eventos is None or df_eventos.empty:
     st.error("⚠️ No se encuentra el archivo 'POD_2026-27_11-5-2026.xlsx' o está vacío.")
 else:
+    # 0. CALCULAR FUERZA Y EXTRAER INMUTABLES
     df_unicos_prof_calc = df_eventos.drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original'])
     horas_por_prof_calc = df_unicos_prof_calc[df_unicos_prof_calc['Profesor_Original'] != 'Ninguno'].groupby('Profesor_Original')['Horas_Profesor'].sum().to_dict()
     
@@ -175,7 +171,6 @@ else:
             f_real = pd.to_numeric(info_f.get('Fuerza', 240), errors='coerce')
             f_real = 240 if pd.isna(f_real) or f_real <= 0 else f_real
         h_asig = horas_por_prof_calc.get(p, 0)
-        # Activos si les faltan más de 9 horas
         if (f_real - h_asig) > 9:
             lista_profesores_activos.append(p)
     lista_profesores_activos.sort()
@@ -187,26 +182,32 @@ else:
     idx_prof = lista_profesores_activos.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores_activos else 0
     prof_a_cargar = st.sidebar.selectbox("Selecciona tu perfil:", ["-- Ninguno --"] + lista_profesores_activos, index=idx_prof)
     
+    # Lógica de carga inmutable
     if prof_a_cargar != st.session_state['prof_cargado']:
         st.session_state['prof_cargado'] = prof_a_cargar
+        st.session_state['seleccion_asignaturas'] = []  # Reseteamos las selecciones NUEVAS
+        
         if prof_a_cargar != "-- Ninguno --":
-            df_prof_load = df_eventos[df_eventos['Profesor_Original'] == prof_a_cargar].drop_duplicates(subset=['Código', 'Grupo'])
-            # Blindaje para evitar NaNs en las cadenas
-            df_prof_load['Asig_Grupo'] = "[" + df_prof_load['Código'].astype(str) + "] " + df_prof_load['Asignatura'].astype(str) + " (" + df_prof_load['Grupo'].astype(str) + ") - " + df_prof_load['Titulación'].astype(str) + " | " + df_prof_load['Estado_Ocupacion'].astype(str)
-            
-            st.session_state['seleccion_asignaturas'] = df_prof_load['Asig_Grupo'].tolist()
-            st.session_state['horas_precargadas'] = {f"{r['Código']}_{r['Grupo']}": int(r['Horas_Profesor']) for _, r in df_prof_load.iterrows()}
-            
             info_fuerza_cargado = buscar_fuerza_profesor(prof_a_cargar, df_fuerza)
             if info_fuerza_cargado is not None:
                 st.session_state['fuerza_objetivo'] = pd.to_numeric(info_fuerza_cargado.get('Fuerza', 240), errors='coerce')
             else:
                 st.session_state['fuerza_objetivo'] = 240
         else:
-            st.session_state['seleccion_asignaturas'] = []
-            st.session_state['horas_precargadas'] = {}
             st.session_state['fuerza_objetivo'] = 240
         st.rerun()
+
+    # Extraemos la capa inmutable de la persona seleccionada
+    df_inmutables = pd.DataFrame()
+    df_inmutables_unicos = pd.DataFrame()
+    horas_inmutables_total = 0
+    
+    if st.session_state['prof_cargado'] != "-- Ninguno --":
+        df_inmutables = df_eventos[df_eventos['Profesor_Original'] == st.session_state['prof_cargado']].copy()
+        if not df_inmutables.empty:
+            df_inmutables['Es_Inmutable'] = True
+            df_inmutables_unicos = df_inmutables.drop_duplicates(subset=['Código', 'Grupo'])
+            horas_inmutables_total = df_inmutables_unicos['Horas_Profesor'].sum()
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("<p class='big-font'>1. 🎯 Filtros Principales</p>", unsafe_allow_html=True)
@@ -234,7 +235,7 @@ else:
 
     ocultar_compartidas = st.sidebar.checkbox("👁️ **Ocultar asignaturas compartidas** (ya empezadas)")
     if ocultar_compartidas:
-        df_f4 = df_f4[(df_f4['Profesor_Original'] == 'Ninguno') | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])]
+        df_f4 = df_f4[df_f4['Profesor_Original'] == 'Ninguno']
 
     asignaturas_nombres = sorted(list(df_f4['Asignatura'].dropna().unique()))
     evitar_asig = st.sidebar.multiselect("🚫 Excluir nombres específicos:", asignaturas_nombres)
@@ -242,23 +243,36 @@ else:
         df_f4 = df_f4[~df_f4['Asignatura'].isin(evitar_asig)]
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("<p class='big-font'>3. 📋 Selección de Asignaturas</p>", unsafe_allow_html=True)
+    st.sidebar.markdown("<p class='big-font'>3. 📋 Selección de Nuevas Asignaturas</p>", unsafe_allow_html=True)
     
-    strict_mode = st.sidebar.checkbox("🔒 **Modo Estricto:** Ocultar incompatibles", help="Oculta del desplegable las asignaturas que se solapan con tu elección actual.")
+    strict_mode = st.sidebar.checkbox("🔒 **Modo Estricto:** Ocultar incompatibles", help="Oculta las asignaturas que se solapan con tu elección actual (incluyendo las de tu 1ª vuelta).")
 
-    mask_disp = (df_f4['Horas_Disponibles'] > 0) | (df_f4['Profesor_Original'] == st.session_state['prof_cargado'])
+    # Solo disponemos las que tienen vacantes (Horas_Disponibles > 0)
+    mask_disp = (df_f4['Horas_Disponibles'] > 0)
     df_disponibles = df_f4[mask_disp].copy()
     
-    df_disponibles['Asig_Grupo'] = "[" + df_disponibles['Código'].astype(str) + "] " + df_disponibles['Asignatura'].astype(str) + " (" + df_disponibles['Grupo'].astype(str) + ") - " + df_disponibles['Titulación'].astype(str) + " | " + df_disponibles['Estado_Ocupacion'].astype(str)
-    lista_opciones = sorted(list(df_disponibles.drop_duplicates(subset=['Código', 'Grupo'])['Asig_Grupo'].dropna().unique()))
+    df_disponibles['Asig_Grupo_ID'] = "[" + df_disponibles['Código'].astype(str) + "] " + df_disponibles['Asignatura'].astype(str) + " (" + df_disponibles['Grupo'].astype(str) + ") - " + df_disponibles['Titulación'].astype(str)
+    df_disponibles['Asig_Grupo_Label'] = df_disponibles['Asig_Grupo_ID'] + " | " + df_disponibles['Estado_Ocupacion'].astype(str)
     
-    sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones]
+    label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
+    lista_opciones_id = sorted(list(label_dict.keys()))
     
+    sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]
+    
+    # Matriz de solapamientos
     busy_dict = {}
     conflictos_exist = False
     
+    # 1. Metemos las horas inmutables al cálculo de solapamientos
+    if not df_inmutables.empty:
+        for _, r in df_inmutables.iterrows():
+            f = r['Fecha_str']
+            if f not in busy_dict: busy_dict[f] = []
+            busy_dict[f].append((r['Hora Inicio'], r['Hora Fin']))
+            
+    # 2. Metemos las nuevas horas seleccionadas
     if sel_actual:
-        df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo'].isin(sel_actual)]
+        df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(sel_actual)]
         for _, r in df_sel_temp.iterrows():
             f = r['Fecha_str']
             hi, hf = r['Hora Inicio'], r['Hora Fin']
@@ -270,13 +284,13 @@ else:
     if strict_mode:
         if conflictos_exist:
             st.session_state['seleccion_asignaturas'] = []
-            st.sidebar.warning("⚠️ Modo estricto activado: Se ha reiniciado la elección porque existían solapamientos.")
+            st.sidebar.warning("⚠️ Modo estricto activado: Se ha reiniciado la NUEVA elección porque existían solapamientos.")
             st.rerun()
         else:
             valid_options = []
-            for ag, grp_df in df_disponibles.groupby('Asig_Grupo'):
-                if ag in sel_actual:
-                    valid_options.append(ag)
+            for ag_id, grp_df in df_disponibles.groupby('Asig_Grupo_ID'):
+                if ag_id in sel_actual:
+                    valid_options.append(ag_id)
                     continue
                 overlap = False
                 for _, r in grp_df.iterrows():
@@ -288,109 +302,122 @@ else:
                                 overlap = True
                                 break
                     if overlap: break
-                if not overlap: valid_options.append(ag)
-            lista_opciones = [x for x in lista_opciones if x in valid_options]
+                if not overlap: valid_options.append(ag_id)
+            lista_opciones_id = [x for x in lista_opciones_id if x in valid_options]
 
     st.session_state['seleccion_asignaturas'] = sel_actual
-    asignaturas_elegidas = st.sidebar.multiselect("Elige tus grupos:", lista_opciones, key='seleccion_asignaturas')
+    asignaturas_elegidas_id = st.sidebar.multiselect(
+        "Elige grupos adicionales:", 
+        options=lista_opciones_id, 
+        default=sel_actual,
+        format_func=lambda x: label_dict.get(x, x)
+    )
+    st.session_state['seleccion_asignaturas'] = asignaturas_elegidas_id
 
     paleta = ["#E3F2FD", "#E8F5E9", "#FFF3E0", "#FCE4EC", "#F3E5F5", "#E0F2F1", "#FFF8E1", "#FBE9E7", "#ECEFF1"]
     
     df_seleccion = pd.DataFrame()
     horas_asumidas_dict = {}
 
-    if asignaturas_elegidas:
-        df_seleccion = df_disponibles[df_disponibles['Asig_Grupo'].isin(asignaturas_elegidas)].copy()
+    if asignaturas_elegidas_id:
+        df_seleccion = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(asignaturas_elegidas_id)].copy()
+        df_seleccion['Es_Inmutable'] = False
         df_unicos = df_seleccion.drop_duplicates(subset=['Código', 'Grupo'])
         
         st.sidebar.markdown("---")
-        st.sidebar.subheader("Ajuste de Horas a Impartir")
+        st.sidebar.subheader("Ajuste de Nuevas Horas")
         
         for _, r in df_unicos.iterrows():
             max_h_disp = int(r['Horas_Disponibles'])
             clave_id = f"{r['Código']}_{r['Grupo']}"
-            h_actual = st.session_state.get('horas_precargadas', {}).get(clave_id, 0)
-            max_slider = max_h_disp + h_actual
-            default_val = h_actual if h_actual > 0 else max_slider
-            horas_asumidas_dict[clave_id] = st.sidebar.slider(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})", 0, max_slider, default_val, 1, key=f"sl_{clave_id}")
+            horas_asumidas_dict[clave_id] = st.sidebar.slider(f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']})", 0, max_h_disp, max_h_disp, 1, key=f"sl_{clave_id}")
             
-        horas_totales_asumidas = sum(horas_asumidas_dict.values())
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Progreso Docente (POD)")
-        
-        fuerza_default = st.session_state.get('fuerza_objetivo', 240)
-        if pd.isna(fuerza_default): fuerza_default = 240
-        objetivo_horas = st.sidebar.number_input("🎯 Tu objetivo de horas:", 1, 300, int(fuerza_default), 10)
-        
-        progreso = min(horas_totales_asumidas / objetivo_horas, 1.0)
-        st.sidebar.progress(progreso)
-        st.sidebar.metric(label="⏱️ Horas Docentes Asumidas", value=f"{horas_totales_asumidas} h")
-        
-        horas_faltantes = objetivo_horas - horas_totales_asumidas
+    horas_nuevas_total = sum(horas_asumidas_dict.values())
+    horas_totales_asumidas = horas_inmutables_total + horas_nuevas_total
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Progreso Docente (POD)")
+    
+    fuerza_default = st.session_state.get('fuerza_objetivo', 240)
+    if pd.isna(fuerza_default): fuerza_default = 240
+    objetivo_horas = st.sidebar.number_input("🎯 Tu objetivo de horas:", 1, 300, int(fuerza_default), 10)
+    
+    progreso = min(horas_totales_asumidas / objetivo_horas, 1.0) if objetivo_horas > 0 else 0
+    st.sidebar.progress(progreso)
+    st.sidebar.metric(label="⏱️ Horas Docentes Asumidas", value=f"{horas_totales_asumidas} h")
+    
+    horas_faltantes = objetivo_horas - horas_totales_asumidas
 
-        if horas_faltantes > 0:
-            st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
-            if not strict_mode:
-                st.sidebar.markdown("---")
-                st.sidebar.subheader("💡 Sugerencias Inteligentes")
-                grupos_sel = df_seleccion['Asig_Grupo'].unique()
-                campus_sel = df_seleccion['Campus'].unique()
-                nombres_sel = df_seleccion['Asignatura'].unique()
-                df_eval = df_disponibles[~df_disponibles['Asig_Grupo'].isin(grupos_sel)]
-                recomendaciones = []
-                for asig_grupo, df_grupo in df_eval.groupby('Asig_Grupo'):
-                    horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
-                    if horas_disp <= 0: continue
-                    tiene_solape = False
-                    for _, r in df_grupo.iterrows():
-                        f = r['Fecha_str']
-                        if f in busy_dict:
-                            hi, hf = r['Hora Inicio'], r['Hora Fin']
-                            for (b_hi, b_hf) in busy_dict[f]:
-                                if hi < b_hf and b_hi < hf:
-                                    tiene_solape = True
-                                    break
-                        if tiene_solape: break
-                    if tiene_solape: continue
-                    score = 0
-                    campus_g, codigo_g, nombre_g = df_grupo['Campus'].iloc[0], df_grupo['Código'].iloc[0], df_grupo['Asignatura'].iloc[0]
-                    if campus_g in campus_sel: score += 10
-                    if nombre_g in nombres_sel: score += 20 
-                    if horas_disp <= horas_faltantes: score += 5 
-                    recomendaciones.append({'Asig_Grupo': asig_grupo, 'Nombre': nombre_g, 'Codigo': codigo_g, 'Horas': horas_disp, 'Campus': campus_g, 'Score': score})
-                if recomendaciones:
-                    recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
-                    top_3, top_10 = recomendaciones[:3], recomendaciones[3:10]
-                    st.sidebar.caption("Opciones compatibles listas para añadir:")
-                    for rec in top_3:
-                        st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-                        st.sidebar.button("➕ Añadir a mi POD", key=f"btn_t3_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
-                        st.sidebar.markdown("---")
-                    if top_10:
-                        with st.sidebar.expander("Ver más sugerencias (Top 10)"):
-                            for rec in top_10:
-                                st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-                                st.button("➕ Añadir a mi POD", key=f"btn_t10_{rec['Asig_Grupo']}", on_click=agregar_asignatura, args=(rec['Asig_Grupo'],))
-                                st.markdown("---")
-        else:
-            st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
+    if horas_faltantes > 0:
+        st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
+        if not strict_mode:
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("💡 Sugerencias Inteligentes")
+            grupos_sel = df_seleccion['Asig_Grupo_ID'].unique() if not df_seleccion.empty else []
+            campus_sel = df_seleccion['Campus'].unique() if not df_seleccion.empty else []
+            nombres_sel = df_seleccion['Asignatura'].unique() if not df_seleccion.empty else []
+            df_eval = df_disponibles[~df_disponibles['Asig_Grupo_ID'].isin(grupos_sel)]
+            recomendaciones = []
+            for asig_grupo_id, df_grupo in df_eval.groupby('Asig_Grupo_ID'):
+                horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
+                if horas_disp <= 0: continue
+                tiene_solape = False
+                for _, r in df_grupo.iterrows():
+                    f = r['Fecha_str']
+                    if f in busy_dict:
+                        hi, hf = r['Hora Inicio'], r['Hora Fin']
+                        for (b_hi, b_hf) in busy_dict[f]:
+                            if hi < b_hf and b_hi < hf:
+                                tiene_solape = True
+                                break
+                    if tiene_solape: break
+                if tiene_solape: continue
+                score = 0
+                campus_g, codigo_g, nombre_g = df_grupo['Campus'].iloc[0], df_grupo['Código'].iloc[0], df_grupo['Asignatura'].iloc[0]
+                if campus_g in campus_sel: score += 10
+                if nombre_g in nombres_sel: score += 20 
+                if horas_disp <= horas_faltantes: score += 5 
+                recomendaciones.append({'Asig_Grupo_ID': asig_grupo_id, 'Nombre': nombre_g, 'Codigo': codigo_g, 'Horas': horas_disp, 'Campus': campus_g, 'Score': score})
+            if recomendaciones:
+                recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
+                top_3, top_10 = recomendaciones[:3], recomendaciones[3:10]
+                st.sidebar.caption("Opciones compatibles listas para añadir:")
+                for rec in top_3:
+                    st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
+                if top_10:
+                    with st.sidebar.expander("Ver más sugerencias (Top 10)"):
+                        for rec in top_10:
+                            st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
     else:
-        st.sidebar.info("👈 Selección de asignaturas en el menú desplegable superior.")
-        objetivo_horas = st.session_state.get('fuerza_objetivo', 240)
-        horas_totales_asumidas = 0
+        st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
+
+    st.sidebar.info("👈 Selección de asignaturas en el menú desplegable.")
+
+    # --- UNIÓN DE CAPAS (Inmutables + Nuevas) ---
+    dfs_to_concat = []
+    if not df_inmutables.empty: dfs_to_concat.append(df_inmutables)
+    if not df_seleccion.empty: dfs_to_concat.append(df_seleccion)
+    
+    df_union = pd.concat(dfs_to_concat, ignore_index=True) if dfs_to_concat else pd.DataFrame()
 
     # --- CÁLCULOS GLOBALES ANTES DE LAS PESTAÑAS ---
     alertas_normativa = []
     conflictos_lista = []
     alertas_desplazamiento = []
     
-    if not df_seleccion.empty:
+    horas_evaluacion = {}
+    if not df_inmutables_unicos.empty:
+        for _, r in df_inmutables_unicos.iterrows():
+            horas_evaluacion[f"{r['Código']}_{r['Grupo']}"] = horas_evaluacion.get(f"{r['Código']}_{r['Grupo']}", 0) + int(r['Horas_Profesor'])
+    for clave_id, h in horas_asumidas_dict.items():
+        horas_evaluacion[clave_id] = horas_evaluacion.get(clave_id, 0) + h
+
+    if not df_union.empty:
         familias_evaluadas = {}
-        for _, r in df_unicos.iterrows():
+        for _, r in df_union.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
             codigo = r['Código']
             grupo_str = str(r['Grupo']).strip()
-            h_asum = horas_asumidas_dict.get(f"{codigo}_{grupo_str}", 0)
+            h_asum = horas_evaluacion.get(f"{codigo}_{grupo_str}", 0)
             
             if h_asum > 0:
                 madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', grupo_str, flags=re.IGNORECASE).strip()
@@ -419,12 +446,12 @@ else:
                     desdobles_disp.append(g_disp)
             
             H_T = get_max_h(codigo, madre)
-            h_T = horas_asumidas_dict.get(f"{codigo}_{madre}", 0)
+            h_T = horas_evaluacion.get(f"{codigo}_{madre}", 0)
             
             P_data = []
             for p in desdobles_disp:
                 Hp = get_max_h(codigo, p)
-                hp = horas_asumidas_dict.get(f"{codigo}_{p}", 0)
+                hp = horas_evaluacion.get(f"{codigo}_{p}", 0)
                 if Hp > 0 or hp > 0: P_data.append((p, hp, Hp))
             
             num_prac_full = sum(1 for _, hp, Hp in P_data if is_full(hp, Hp))
@@ -461,7 +488,7 @@ else:
                     err_msg += " | ".join(detalles) + ". *Opciones válidas: Asignatura completa, Teoría + 1 ÚNICO Desdoble, o Mitad de Teoría + Mitad de todos sus Desdobles.*"
                     alertas_normativa.append(err_msg)
 
-        df_sel_ord = df_seleccion.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
+        df_sel_ord = df_union.drop_duplicates(subset=['Código', 'Grupo', 'Fecha_str', 'Hora Inicio']).sort_values(by=['Fecha_Obj', 'Hora Inicio'])
         def min_entre_horas(h1, h2):
             try: return (int(h2.split(':')[0])*60 + int(h2.split(':')[1])) - (int(h1.split(':')[0])*60 + int(h1.split(':')[1]))
             except: return 999
@@ -497,12 +524,12 @@ else:
         if conflictos_lista:
             st.error("⚠️ **¡Atención!** Se han detectado solapamientos de horario en tu selección. Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
         if alertas_normativa:
-            st.error("⚠️ **¡Atención!** Tu selección actual no cumple la normativa de 1ª vuelta. Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
+            st.error("⚠️ **¡Atención!** Tu selección actual no cumple la normativa. Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
         if alertas_desplazamiento:
             st.warning("🚖 **¡Aviso de Movilidad!** Tienes márgenes de tiempo muy justos para cambiar de sede (menos de 60 min). Ve a la pestaña **👤 MI POD: Conflictos** para revisar los detalles.")
 
-        if not df_seleccion.empty:
-            pct_circle = min(horas_totales_asumidas / objetivo_horas, 1.0)
+        if not df_union.empty:
+            pct_circle = min(horas_totales_asumidas / objetivo_horas, 1.0) if objetivo_horas > 0 else 0
             circ = 2 * 3.14159 * 40
             offset = circ - (circ * pct_circle)
             color_circle = "#4CAF50" if horas_totales_asumidas >= objetivo_horas else "#2196F3"
@@ -525,9 +552,9 @@ else:
             """
             st.markdown(html_circle, unsafe_allow_html=True)
 
-            for semestre in sorted(df_seleccion['Semestre'].astype(str).unique()):
+            for semestre in sorted(df_union['Semestre'].astype(str).unique()):
                 st.markdown(f"#### 📅 {semestre.upper()}")
-                df_sem = df_seleccion[df_seleccion['Semestre'] == semestre].copy()
+                df_sem = df_union[df_union['Semestre'] == semestre].copy()
                 df_sem['Franja Horaria'] = df_sem['Hora Inicio'] + " - " + df_sem['Hora Fin']
                 
                 html = "<style>.ht { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; margin-bottom: 25px; } .ht th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; } .ht td { border: 1px solid #ddd; padding: 4px; vertical-align: top; height: 90px; overflow-y: auto; background-color: #ffffff; } .hc { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; } .card-min { padding: 4px; margin-bottom: 4px; border-radius: 4px; font-size: 0.75em; border-left: 4px solid #999; display: flex; flex-direction: column; overflow: hidden; line-height: 1.2; box-shadow: 0 1px 2px rgba(0,0,0,0.05); } .card-t { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; color: #222; } .card-i { color: #555; }</style><table class='ht'><tr><th class='hc'>Hora</th><th>Lunes (L)</th><th>Martes (M)</th><th>Miércoles (X)</th><th>Jueves (J)</th><th>Viernes (V)</th></tr>"
@@ -538,8 +565,9 @@ else:
                         html += "<td>"
                         for _, r in df_sem[(df_sem['Franja Horaria'] == franja) & (df_sem['Día'] == dia)].drop_duplicates(subset=['Código', 'Grupo']).iterrows():
                             bg = mapa_colores.get(r['Código'], "#E3F2FD")
-                            h_asum = horas_asumidas_dict.get(f"{r['Código']}_{r['Grupo']}", 0)
-                            html += f"<div class='card-min' style='background-color: {bg};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({h_asum}h)</div></div>"
+                            h_asum = horas_evaluacion.get(f"{r['Código']}_{r['Grupo']}", 0)
+                            icono = "🔒 " if r.get('Es_Inmutable', False) else "✨ "
+                            html += f"<div class='card-min' style='background-color: {bg};'><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>{icono}[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>{r['Grupo']} ({h_asum}h)</div></div>"
                         html += "</td>"
                     html += "</tr>"
                 st.markdown(html + "</table>", unsafe_allow_html=True)
@@ -547,19 +575,31 @@ else:
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("📋 Leyenda y Gestión de Asignaturas")
             
-            for _, r in df_seleccion.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
+            df_leyenda = df_union.drop_duplicates(subset=['Código', 'Grupo']).copy()
+            for _, r in df_leyenda.iterrows():
+                is_fixed = not df_inmutables.empty and ((df_inmutables['Código'] == r['Código']) & (df_inmutables['Grupo'] == r['Grupo'])).any()
+                is_new = not df_seleccion.empty and ((df_seleccion['Código'] == r['Código']) & (df_seleccion['Grupo'] == r['Grupo'])).any()
+                
                 col1, col2, col3, col4 = st.columns([0.5, 3.5, 4, 1.5])
                 with col1: st.markdown(f"<div style='background-color: {mapa_colores.get(r['Código'])}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
                 with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
                 with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
-                with col4: st.button("❌ Quitar", key=f"del_{r['Asig_Grupo']}", on_click=eliminar_asignatura, args=(r['Asig_Grupo'],))
+                
+                with col4:
+                    if is_new:
+                        ag_id = df_seleccion[(df_seleccion['Código'] == r['Código']) & (df_seleccion['Grupo'] == r['Grupo'])]['Asig_Grupo_ID'].iloc[0]
+                        st.button("❌ Quitar Nueva", key=f"del_new_{r['Código']}_{r['Grupo']}", on_click=eliminar_asignatura, args=(ag_id,))
+                    else:
+                        st.markdown("🔒 **Fija (1ª Vuelta)**")
                 st.markdown("---")
+        else:
+            st.info("Sin asignaturas en el calendario.")
 
     with tab2:
-        if not df_seleccion.empty:
-            df_seleccion['Lunes_Semana'] = df_seleccion['Fecha_Obj'] - pd.to_timedelta(df_seleccion['Fecha_Obj'].dt.weekday, unit='d')
-            semanas_ordenadas = sorted(df_seleccion['Lunes_Semana'].dropna().unique())
-            dias_activos = [d for d in ['L', 'M', 'X', 'J', 'V', 'S', 'D'] if d in df_seleccion['Día'].values]
+        if not df_union.empty:
+            df_union['Lunes_Semana'] = df_union['Fecha_Obj'] - pd.to_timedelta(df_union['Fecha_Obj'].dt.weekday, unit='d')
+            semanas_ordenadas = sorted(df_union['Lunes_Semana'].dropna().unique())
+            dias_activos = [d for d in ['L', 'M', 'X', 'J', 'V', 'S', 'D'] if d in df_union['Día'].values]
             
             html = "<style>.scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; } .ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; } .ht-crono th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1); } .ht-crono td { border: 1px solid #ddd; padding: 4px; vertical-align: top; background-color: #ffffff; } .hc-sem { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; z-index: 11; } .badge-hora { font-weight: bold; color: #111; font-size: 0.85em; margin-bottom: 3px; border-bottom: 1px dotted rgba(0,0,0,0.2); padding-bottom: 2px; }</style><div class='scroll-crono'><table class='ht-crono'><tr><th class='hc-sem'>Semana</th>"
             for d in dias_activos: html += f"<th>{d}</th>"
@@ -569,7 +609,7 @@ else:
                 html += f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>"
                 for dia in dias_activos:
                     html += "<td>"
-                    for _, r in df_seleccion[(df_seleccion['Lunes_Semana'] == semana) & (df_seleccion['Día'] == dia)].sort_values('Hora Inicio').iterrows():
+                    for _, r in df_union[(df_union['Lunes_Semana'] == semana) & (df_union['Día'] == dia)].sort_values('Hora Inicio').iterrows():
                         html += f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>"
                     html += "</td>"
                 html += "</tr>"
@@ -579,13 +619,13 @@ else:
 
     with tab3:
         st.subheader("Análisis de Solapamientos, Desplazamientos y Normativa")
-        if not df_seleccion.empty:
-            st.markdown("### 📜 Cumplimiento de Normativa (1ª Vuelta)")
+        if not df_union.empty:
+            st.markdown("### 📜 Cumplimiento de Normativa")
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")
             else:
-                st.success("✅ **Normativa de 1ª Vuelta:** Todas las selecciones cumplen con la normativa y los límites de desdobles ocultos.")
+                st.success("✅ **Normativa:** Todas las selecciones cumplen con la normativa y los límites de desdobles ocultos.")
 
             st.markdown("---")
             st.markdown("### 🏃‍♂️ Cruces y Desplazamientos")
@@ -647,7 +687,7 @@ else:
                 elif horas_prof == fuerza_real: 
                     st.success("✅ **POD completado exactamente al 100%.**")
                 else: 
-                    st.success(f"🔥 **POD superado por {horas_prof - fuerza_real}h** (Por encima del 100%).")
+                    st.success(f"🔥 **POD superado por {abs(falta)}h** (Por encima del 100%).")
             
             st.markdown("<br>", unsafe_allow_html=True)
             

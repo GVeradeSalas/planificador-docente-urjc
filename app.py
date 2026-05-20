@@ -620,7 +620,7 @@ else:
     with tab3:
         st.subheader("Análisis de Solapamientos, Desplazamientos y Normativa")
         if not df_union.empty:
-            st.markdown("### 📜 Cumplimiento de Normativa")
+            st.markdown("### 📜 Cumplimiento de Normativa de 1ª vuelta")
             if alertas_normativa:
                 st.warning("⚠️ **Avisos de Normativa:**")
                 for alerta in alertas_normativa: st.write(f"- {alerta}")

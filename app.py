@@ -474,44 +474,6 @@ else:
 
     if horas_faltantes > 0:
         st.sidebar.caption(f"Te faltan **{horas_faltantes} h** para completar tu POD ({int(progreso*100)}%).")
-        if not strict_mode:
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("💡 Sugerencias Inteligentes")
-            grupos_sel = df_seleccion['Asig_Grupo_ID'].unique() if not df_seleccion.empty else []
-            campus_sel = df_seleccion['Campus'].unique() if not df_seleccion.empty else []
-            nombres_sel = df_seleccion['Asignatura'].unique() if not df_seleccion.empty else []
-            df_eval = df_disponibles[~df_disponibles['Asig_Grupo_ID'].isin(grupos_sel)]
-            recomendaciones = []
-            for asig_grupo_id, df_grupo in df_eval.groupby('Asig_Grupo_ID'):
-                horas_disp = int(df_grupo['Horas_Disponibles'].iloc[0])
-                if horas_disp <= 0: continue
-                tiene_solape = False
-                for _, r in df_grupo.iterrows():
-                    f = r['Fecha_str']
-                    if f in busy_dict:
-                        hi, hf = r['Hora Inicio'], r['Hora Fin']
-                        for (b_hi, b_hf) in busy_dict[f]:
-                            if hi < b_hf and b_hi < hf:
-                                tiene_solape = True
-                                break
-                    if tiene_solape: break
-                if tiene_solape: continue
-                score = 0
-                campus_g, codigo_g, nombre_g = df_grupo['Campus'].iloc[0], df_grupo['Código'].iloc[0], df_grupo['Asignatura'].iloc[0]
-                if campus_g in campus_sel: score += 10
-                if nombre_g in nombres_sel: score += 20 
-                if horas_disp <= horas_faltantes: score += 5 
-                recomendaciones.append({'Asig_Grupo_ID': asig_grupo_id, 'Nombre': nombre_g, 'Codigo': codigo_g, 'Horas': horas_disp, 'Campus': campus_g, 'Score': score})
-            if recomendaciones:
-                recomendaciones.sort(key=lambda x: x['Score'], reverse=True)
-                top_3, top_10 = recomendaciones[:3], recomendaciones[3:10]
-                st.sidebar.caption("Opciones compatibles listas para añadir:")
-                for rec in top_3:
-                    st.sidebar.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
-            if top_10:
-                with st.sidebar.expander("Ver más sugerencias (Top 10)"):
-                    for rec in top_10:
-                        st.markdown(f"**[{rec['Codigo']}] {rec['Nombre']}**<br>🏫 {rec['Campus']} | ⏱️ {rec['Horas']}h", unsafe_allow_html=True)
     else:
         st.sidebar.success("✅ ¡Has alcanzado tu objetivo de horas!")
 

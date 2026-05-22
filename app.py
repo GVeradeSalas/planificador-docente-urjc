@@ -587,7 +587,7 @@ mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_ev
 # --- RESTO DE PESTAÑAS ---
 with tab2:
     if conflictos_lista: st.error("⚠️ Tienes solapamientos. Ve a **Conflictos**.")
-    if alertas_normativa: st.error("⚠️ Tu selección incumple normativa. Ve a **Conflictos**.")
+    if alertas_normativa: st.error("⚠️ Tu selección incumple normativa (o no... Supervisar por si acaso). Ve a **Conflictos**.")
     
     if not df_union.empty:
         for semestre in sorted(df_union['Semestre'].astype(str).unique()):

@@ -694,6 +694,18 @@ with tab5:
             horas_prof_eval = {f"{r['Código']}_{r['Grupo']}": int(r['Horas_Profesor']) for _, r in df_sem_prof.drop_duplicates(subset=['Código', 'Grupo']).iterrows()}
             html_calendario_prof = generar_html_calendario(df_sem_prof, horas_prof_eval, None, mapa_colores)
             st.markdown(html_calendario_prof, unsafe_allow_html=True)
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("📋 Leyenda de Asignaturas del Docente")
+        
+        df_leyenda_prof = df_prof.drop_duplicates(subset=['Código', 'Grupo']).copy()
+        for _, r in df_leyenda_prof.iterrows():
+            bg = mapa_colores.get(r['Código'], "#E3F2FD")
+            col1, col2, col3 = st.columns([0.5, 4.5, 5])
+            with col1: st.markdown(f"<div style='background-color: {bg}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
+            with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
+            with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
+            st.markdown("---")
 
 with tab6:
     st.subheader("📈 Estado Global de la Elección de POD")

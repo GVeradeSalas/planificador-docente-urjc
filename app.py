@@ -628,7 +628,7 @@ with tab3:
                 
                 with colB:
                     st.markdown("**📅 Rango por Asignatura (Compartidas)**")
-                    asignaturas_unicas = df_union[['Código', 'Asignatura', 'Grupo']].drop_duplicates()
+                    asignaturas_unicas = df_union[['Código', 'Asignatura', 'Grupo', 'Titulación']].drop_duplicates()
                     rangos_asig = {}
                     
                     for _, r in asignaturas_unicas.iterrows():
@@ -638,7 +638,7 @@ with tab3:
                         
                         if len(fechas_asig) > 1:
                             rango = st.select_slider(
-                                f"[{r['Código']}] {r['Grupo']}",
+                                f"**[{r['Código']}] {r['Asignatura']}** {r['Grupo']} {r['Titulación']}",
                                 options=fechas_asig,
                                 value=(fechas_asig[0], fechas_asig[-1]),
                                 key=f"rango_{cod_grp}"

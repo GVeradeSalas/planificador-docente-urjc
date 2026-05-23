@@ -302,7 +302,7 @@ with tab1:
             horas_inmutables_total = df_inmutables.drop_duplicates(subset=['Código', 'Grupo'])['Horas_Profesor'].sum()
 
     st.markdown("---")
-    st.markdown("#### 🎯 2. Filtros de Búsqueda")
+    st.markdown("#### 🎯 Filtros de Búsqueda")
     colF1, colF2, colF3 = st.columns(3)
     
     with colF1:
@@ -429,7 +429,7 @@ with tab1:
 
     # Panel Dual
     st.markdown("---")
-    st.markdown("#### 📋 4. Selección de Nuevas Asignaturas")
+    st.markdown("#### 📋 Selección de Nuevas Asignaturas")
     
     colL, colR = st.columns(2)
     with colL:

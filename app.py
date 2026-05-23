@@ -622,9 +622,11 @@ with tab3:
                 colA, colB = st.columns([1, 1])
                 
                 with colA:
-                    st.markdown("**🏖️ Días Festivos**")
+                    st.markdown("**🏖️ Días Festivos** (Sólo los que no aparezcan en rojo en el calendario)")
+                    festivos_programados = ["12/10/26", "02/11/26", "04/12/26", "07/12/26", "08/12/26", "22/03/27", "22/03/27", "23/03/27", "24/03/27", "25/03/27", "26/03/27", "29/03/27"]
                     fechas_unicas = sorted(df_union['Fecha_str'].unique(), key=lambda x: datetime.datetime.strptime(x, '%d/%m/%y'))
-                    festivos = st.multiselect("Selecciona días para eliminar del calendario:", fechas_unicas)
+                    festivos_usuarios = st.multiselect("Selecciona días para eliminar del calendario:", fechas_unicas)
+                    festivos = list(set(festivos_programados + festivos_usuarios))
                 
                 with colB:
                     st.markdown("**📅 Rango por Asignatura (Compartidas)**")

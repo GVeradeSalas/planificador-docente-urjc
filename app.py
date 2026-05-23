@@ -371,7 +371,7 @@ with tab1:
         clave_actual = (r['Código'], r['Grupo']) # En las asignaturas madre, su grupo coincide con su raíz
         if clave_actual not in combinaciones_ocupadas:
             lista_desplegable_libres.append(
-                f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) - {r['Titulación']} | 🏫 {r['Campus']}"
+                f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) - {r['Titulación']} | 🏫 {r['Campus']} ({r['Semestre']})"
             )
     
     # 5. Interfaz gráfica en formato expander (Visualización en Lista)

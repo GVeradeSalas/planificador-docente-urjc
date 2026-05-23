@@ -349,27 +349,43 @@ with tab1:
     # Contadores de Estado de Oferta
     st.markdown("---")
     st.markdown("#### 📊 3. Estado de la Oferta (Bajo Filtros Actuales)")
-    libres = 0
-    compartidas = 0
-    cod_procesados = set()
-    for _, r in df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).iterrows():
-        cod = r['Código']
-        if cod in cod_procesados: continue
-        madre_calc = re.sub(r'[-_ ]?(?:G\d*)?[-_ ]?P\d+$', '', str(r['Grupo']), flags=re.IGNORECASE).strip()
-        madre_rows = df_eventos[(df_eventos['Código'] == cod) & (df_eventos['Grupo'].astype(str).str.strip() == madre_calc)]
-        if not madre_rows.empty:
-            disp, tot = madre_rows.iloc[0]['Horas_Disponibles'], madre_rows.iloc[0]['Horas_Totales']
-            if disp == tot and tot > 0: libres += 1
-            elif 0 < disp < tot: compartidas += 1
-        else:
-            disp, tot = r['Horas_Disponibles'], r['Horas_Totales']
-            if disp == tot and tot > 0: libres += 1
-            elif 0 < disp < tot: compartidas += 1
-        cod_procesados.add(cod)
+    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES (CORREGIDO POR GRUPO RAÍZ) ---
+        # 1. Función para asociar cualquier línea (Teoría o Desdoble) con su Grupo Madre (AM, BM, AT, BT)
+    def obtener_grupo_madre(grupo):
+        g_str = str(grupo)
+        for m in ["AM", "BM", "AT", "BT"]:
+            if m in g_str:
+                return m
+        return g_str
 
-    cC1, cC2, _ = st.columns([1, 1, 2])
-    cC1.metric("🟢 Asignaturas 100% Libres", libres, help="Asignaturas donde el grupo principal (Teoría) está completamente libre.")
-    cC2.metric("🟡 Asignaturas a Compartir", compartidas, help="Asignaturas madre que ya tienen algunas horas cogidas por otros compañeros.")
+    # Creamos una columna temporal para agrupar las líneas con sus respectivas familias
+    df_eventos['Grupo_Madre_Analisis'] = df_eventos['Grupo'].apply(obtener_grupo_madre)
+    
+    # 2. Identificar las parejas de [Código + Grupo Madre] que YA tienen algún profesor asignado
+    df_lineas_ocupadas = df_eventos[df_eventos['Profesor_Original'] != 'Ninguno']
+    combinaciones_ocupadas = set(zip(df_lineas_ocupadas['Código'], df_lineas_ocupadas['Grupo_Madre_Analisis']))
+    
+    # 3. Extraer las líneas de asignaturas madre reales (teorías puras)
+    df_madres_reales = df_eventos[df_eventos['Grupo'].isin(["AM", "BM", "AT", "BT"])].drop_duplicates(subset=['Código', 'Grupo'])
+    
+    # 4. Filtrar cuáles están 100% libres (es decir, ni la teoría ni ningún desdoble asociado tiene profesor)
+    lista_desplegable_libres = []
+    for _, r in df_madres_reales.iterrows():
+        clave_actual = (r['Código'], r['Grupo']) # En las asignaturas madre, su grupo coincide con su raíz
+        if clave_actual not in combinaciones_ocupadas:
+            lista_desplegable_libres.append(
+                f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) - {r['Titulación']} | 🏫 {r['Campus']}"
+            )
+    
+    # 5. Interfaz gráfica en formato expander (Visualización en Lista)
+    with st.expander(f"🔍 Ver Asignaturas Completamente Libres ({len(lista_desplegable_libres)})", expanded=False):
+        if lista_desplegable_libres:
+            st.write("Las siguientes asignaturas principales y sus desdobles no tienen asignado ningún docente:")
+            # Recorremos la lista y mostramos cada asignatura como un punto de viñeta
+            for asig in lista_desplegable_libres:
+                st.markdown(f"• {asig}")
+        else:
+            st.info("No quedan asignaturas completamente libres en la oferta.")
 
     # Matriz Solapamientos
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]

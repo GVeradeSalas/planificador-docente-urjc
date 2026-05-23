@@ -346,9 +346,6 @@ with tab1:
     label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
     lista_opciones_id = sorted(list(label_dict.keys()))
 
-    # Contadores de Estado de Oferta
-    st.markdown("---")
-    st.markdown("#### 📊 3. Estado de la Oferta (Bajo Filtros Actuales)")
     # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES (CORREGIDO POR GRUPO RAÍZ) ---
         # 1. Función para asociar cualquier línea (Teoría o Desdoble) con su Grupo Madre (AM, BM, AT, BT)
     def obtener_grupo_madre(grupo):

@@ -587,7 +587,7 @@ mapa_colores = {codigo: paleta[i % len(paleta)] for i, codigo in enumerate(df_ev
 # --- RESTO DE PESTAÑAS ---
 with tab2:
     if conflictos_lista: st.error("⚠️ Tienes solapamientos. Ve a **Conflictos**.")
-    if alertas_normativa: st.error("⚠️ Tu selección incumple normativa (o no... Supervisar por si acaso). Ve a **Conflictos**.")
+    if alertas_normativa: st.error("⚠️ Tu selección incumple normativa. Ve a **Conflictos**.")
     
     if not df_union.empty:
         for semestre in sorted(df_union['Semestre'].astype(str).unique()):
@@ -614,110 +614,83 @@ with tab2:
     else: st.info("Ve a la pestaña de Selección para añadir asignaturas.")
 
 with tab3:
-        st.subheader("📅 Calendario y Horas reales")
+        st.subheader("📅 Calendario y Horas Reales")
         
         if not df_union.empty:
-            # --- AJUSTES DE CALENDARIO ---
-            with st.expander("⚙️ Ajustes de Festivos y Fechas Compartidas", expanded=False):
+            with st.expander("⚙️ Ajustes de Festivos y Fechas Específicas", expanded=False):
                 colA, colB = st.columns([1, 1])
                 
                 with colA:
                     st.markdown("**🏖️ Días Festivos**")
                     fechas_unicas = sorted(df_union['Fecha_str'].unique(), key=lambda x: datetime.datetime.strptime(x, '%d/%m/%y'))
-                    festivos = st.multiselect("Selecciona días para eliminar del calendario:", fechas_unicas)
+                    festivos = st.multiselect("Días para eliminar del calendario:", fechas_unicas)
                 
                 with colB:
-                    st.markdown("**📅 Rango por Asignatura (Compartidas)**")
-                    asignaturas_unicas = df_union[['Código', 'Asignatura', 'Grupo', 'Titulación']].drop_duplicates()
-                    rangos_asig = {}
+                    st.markdown("**📅 Calendario Personalizado (Asignaturas)**")
+                    asignaturas_unicas = df_union[['Código', 'Asignatura', 'Grupo']].drop_duplicates()
+                    ajustes_asig = {}
                     
                     for _, r in asignaturas_unicas.iterrows():
                         cod_grp = f"{r['Código']}_{r['Grupo']}"
                         df_asig_fechas = df_union[(df_union['Código'] == r['Código']) & (df_union['Grupo'] == r['Grupo'])]
                         fechas_asig = sorted(df_asig_fechas['Fecha_str'].unique(), key=lambda x: datetime.datetime.strptime(x, '%d/%m/%y'))
                         
-                        if len(fechas_asig) > 1:
-                            rango = st.select_slider(
-                                f"**{r['Asignatura']}** ({r['Grupo']}) {r['Titulación']}",
-                                options=fechas_asig,
-                                value=(fechas_asig[0], fechas_asig[-1]),
-                                key=f"rango_{cod_grp}"
-                            )
+                        modo = st.radio(f"Modo para {r['Grupo']}:", ["Rango", "Días sueltos"], horizontal=True, key=f"mode_{cod_grp}")
+                        
+                        if modo == "Rango":
+                            rango = st.select_slider(f"Rango fechas:", options=fechas_asig, value=(fechas_asig[0], fechas_asig[-1]), key=f"rango_{cod_grp}")
+                            ajustes_asig[cod_grp] = {"tipo": "rango", "datos": rango}
                         else:
-                            st.caption(f"[{r['Código']}] {r['Grupo']}: Solo tiene 1 clase ({fechas_asig[0]})")
-                            rango = (fechas_asig[0], fechas_asig[0])
-                        rangos_asig[cod_grp] = rango
+                            seleccion = st.multiselect(f"Selecciona días exactos:", options=fechas_asig, default=fechas_asig, key=f"mult_{cod_grp}")
+                            ajustes_asig[cod_grp] = {"tipo": "lista", "datos": seleccion}
 
             # --- APLICAR FILTROS ---
             df_cal = df_union.copy()
-            
-            # 1. Eliminar festivos
-            if festivos:
-                df_cal = df_cal[~df_cal['Fecha_str'].isin(festivos)]
+            if festivos: df_cal = df_cal[~df_cal['Fecha_str'].isin(festivos)]
                 
-            # 2. Eliminar clases fuera del rango asignado
-            def dentro_de_rango(row):
+            def filtrar_asig(row):
                 cg = f"{row['Código']}_{row['Grupo']}"
-                if cg in rangos_asig:
-                    f_inicio, f_fin = rangos_asig[cg]
-                    d_inicio = datetime.datetime.strptime(f_inicio, '%d/%m/%y')
-                    d_fin = datetime.datetime.strptime(f_fin, '%d/%m/%y')
-                    return d_inicio <= row['Fecha_Obj'] <= d_fin
+                if cg in ajustes_asig:
+                    ajuste = ajustes_asig[cg]
+                    if ajuste["tipo"] == "rango":
+                        f_inicio, f_fin = ajuste["datos"]
+                        d_inicio = datetime.datetime.strptime(f_inicio, '%d/%m/%y')
+                        d_fin = datetime.datetime.strptime(f_fin, '%d/%m/%y')
+                        return d_inicio <= row['Fecha_Obj'] <= d_fin
+                    else:
+                        return row['Fecha_str'] in ajuste["datos"]
                 return True
                 
-            df_cal = df_cal[df_cal.apply(dentro_de_rango, axis=1)]
+            df_cal = df_cal[df_cal.apply(filtrar_asig, axis=1)]
 
-            # --- CÁLCULO DE HORAS REALES ---
-            def calc_horas(row):
-                try:
-                    h1, m1 = map(int, row['Hora Inicio'].split(':'))
-                    h2, m2 = map(int, row['Hora Fin'].split(':'))
-                    return (h2 + m2/60.0) - (h1 + m1/60.0)
-                except: return 0
-                
-            df_cal['Horas_Reales'] = df_cal.apply(calc_horas, axis=1)
+            # --- CÁLCULO DE HORAS ---
+            df_cal['Horas_Reales'] = df_cal.apply(lambda row: (int(row['Hora Fin'].split(':')[0]) - int(row['Hora Inicio'].split(':')[0])), axis=1)
             total_horas_reales = df_cal['Horas_Reales'].sum()
             
-            st.success(f"⏱️ **Total de Horas Reales en Calendario:** {total_horas_reales:g} h (Descontando festivos y fuera de rango)")
+            
 
-            # --- NUEVO: DESGLOSE POR GRUPO ---
-            if not df_cal.empty:
-                st.markdown("##### 🔍 Desglose de horas reales impartidas")
-                desglose = df_cal.groupby(['Código', 'Asignatura', 'Grupo'])['Horas_Reales'].sum().reset_index()
-                
-                # Lo organizamos en 3 columnas para que quede visual y ordenado
-                cols = st.columns(3)
-                for idx, row in desglose.iterrows():
-                    with cols[idx % 3]:
-                        st.markdown(f"**[{row['Código']}] {row['Asignatura']}**<br><span style='color:#555;'>Grupo {row['Grupo']}: **{row['Horas_Reales']:g} h**</span>", unsafe_allow_html=True)
-                st.markdown("<br>", unsafe_allow_html=True)
+            # Desglose
+            with st.expander("##### 🔍 Desglose de horas reales impartidas", expanded=False):
+                st.success(f"⏱️ **Total Horas Reales:** {total_horas_reales} h")
+                if not df_cal.empty:
+                    st.markdown("##### 🔍 Desglose de horas reales impartidas")
+                    desglose = df_cal.groupby(['Código', 'Asignatura', 'Grupo', 'Titulación'])['Horas_Reales'].sum().reset_index()
+                    
+                    # Lo organizamos en 3 columnas para que quede visual y ordenado
+                    cols = st.columns(3)
+                    for idx, row in desglose.iterrows():
+                        with cols[idx % 3]:
+                            st.markdown(f"**{row['Asignatura']}**<br><span style='color:#555; '> {row['Titulación']}<br><span style='color:#555;'>Grupo {row['Grupo']}: **{row['Horas_Reales']:g} h**</span>", unsafe_allow_html=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- DIBUJAR CALENDARIO ACTUALIZADO ---
+            # --- DIBUJAR CALENDARIO ---
             if not df_cal.empty:
                 df_cal['Lunes_Semana'] = df_cal['Fecha_Obj'] - pd.to_timedelta(df_cal['Fecha_Obj'].dt.weekday, unit='d')
-                semanas_ordenadas = sorted(df_cal['Lunes_Semana'].dropna().unique())
-                dias_activos = [d for d in ['L', 'M', 'X', 'J', 'V', 'S', 'D'] if d in df_cal['Día'].values]
-                
-                html_lines = []
-                html_lines.append("<style>.scroll-crono { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; } .ht-crono { width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; } .ht-crono th { background-color: #f0f2f6; border: 1px solid #ddd; padding: 6px; text-align: center; font-size: 0.85em; color: #31333F; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1); } .ht-crono td { border: 1px solid #ddd; padding: 4px; vertical-align: top; background-color: #ffffff; } .hc-sem { width: 90px; font-weight: bold; text-align: center; vertical-align: middle !important; background-color: #fafafa !important; font-size: 0.8em; z-index: 11; } .badge-hora { font-weight: bold; color: #111; font-size: 0.85em; margin-bottom: 3px; border-bottom: 1px dotted rgba(0,0,0,0.2); padding-bottom: 2px; }</style>")
-                html_lines.append("<div class='scroll-crono'><table class='ht-crono'><tr><th class='hc-sem'>Semana</th>")
-                for d in dias_activos: html_lines.append(f"<th>{d}</th>")
-                html_lines.append("</tr>")
-                
-                for semana in semanas_ordenadas:
-                    html_lines.append(f"<tr><td class='hc-sem'>Semana<br>{semana.strftime('%d/%m/%Y')}</td>")
-                    for dia in dias_activos:
-                        html_lines.append("<td>")
-                        for _, r in df_cal[(df_cal['Lunes_Semana'] == semana) & (df_cal['Día'] == dia)].sort_values('Hora Inicio').iterrows():
-                            html_lines.append(f"<div class='card-min' style='background-color: {mapa_colores.get(r['Código'], '#E3F2FD')};'><div class='badge-hora'>⏱ {r['Hora Inicio']} - {r['Hora Fin']}</div><div class='card-t' title='[{r['Código']}] {r['Asignatura']}'>[{r['Código']}] {r['Asignatura']}</div><div class='card-i'>Grupo: {r['Grupo']}</div></div>")
-                        html_lines.append("</td>")
-                    html_lines.append("</tr>")
-                html_lines.append("</table></div>")
-                st.markdown("".join(html_lines), unsafe_allow_html=True)
-            else:
-                st.warning("No hay clases en el calendario con los filtros de fechas actuales.")
-        else:
-            st.info("Ve a la pestaña de Selección para añadir asignaturas.")
+                for semana in sorted(df_cal['Lunes_Semana'].dropna().unique()):
+                    st.markdown(f"**Semana del {semana.strftime('%d/%m/%y')}**")
+                    html_cal = generar_html_calendario(df_cal[df_cal['Lunes_Semana'] == semana], {}, None, mapa_colores)
+                    st.markdown(html_cal, unsafe_allow_html=True)
+            else: st.warning("Calendario vacío con estos filtros.")
 
 with tab4:
     st.subheader("Análisis de Solapamientos, Desplazamientos y Normativa")

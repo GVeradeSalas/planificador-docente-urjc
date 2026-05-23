@@ -670,7 +670,7 @@ with tab3:
             
 
             # Desglose
-            with st.expander("##### 🔍 Desglose de horas reales impartidas", expanded=False):
+            with st.expander("🔍 Desglose de horas reales impartidas", expanded=False):
                 st.success(f"⏱️ **Total Horas Reales:** {total_horas_reales} h")
                 if not df_cal.empty:
                     st.markdown("##### 🔍 Desglose de horas reales impartidas")

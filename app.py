@@ -638,7 +638,7 @@ with tab3:
                         
                         if len(fechas_asig) > 1:
                             rango = st.select_slider(
-                                f"**[{r['Código']}] {r['Asignatura']}** ({r['Grupo']}) {r['Titulación']}",
+                                f"**{r['Asignatura']}** ({r['Grupo']}) {r['Titulación']}",
                                 options=fechas_asig,
                                 value=(fechas_asig[0], fechas_asig[-1]),
                                 key=f"rango_{cod_grp}"

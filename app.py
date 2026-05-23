@@ -278,7 +278,7 @@ with tab1:
         info_f = buscar_fuerza_profesor(p, df_fuerza)
         f_real = pd.to_numeric(info_f.get('Fuerza', 240), errors='coerce') if info_f is not None else 240
         f_real = 240 if pd.isna(f_real) or f_real <= 0 else f_real
-        if (f_real - horas_por_prof_calc.get(p, 0)) > 9: lista_profesores_activos.append(p)
+        if (f_real - horas_por_prof_calc.get(p, 0)) > -20: lista_profesores_activos.append(p)
     lista_profesores_activos.sort()
 
     idx_prof = lista_profesores_activos.index(st.session_state['prof_cargado']) + 1 if st.session_state['prof_cargado'] in lista_profesores_activos else 0

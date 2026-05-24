@@ -346,8 +346,8 @@ with tab1:
     label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
     lista_opciones_id = sorted(list(label_dict.keys()))
 
-    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES (CORREGIDO POR GRUPO RAÍZ) ---
-        # 1. Función para asociar cualquier línea (Teoría o Desdoble) con su Grupo Madre (AM, BM, AT, BT)
+    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES (CON FILTROS APLICADOS) ---
+    # 1. Función para asociar cualquier línea (Teoría o Desdoble) con su Grupo Madre (AM, BM, AT, BT)
     def obtener_grupo_madre(grupo):
         g_str = str(grupo)
         for m in ["AM", "BM", "AT", "BT"]:
@@ -355,34 +355,35 @@ with tab1:
                 return m
         return g_str
 
-    # Creamos una columna temporal para agrupar las líneas con sus respectivas familias
+    # Creamos una columna temporal en el df GLOBAL para saber qué está ocupado realmente
     df_eventos['Grupo_Madre_Analisis'] = df_eventos['Grupo'].apply(obtener_grupo_madre)
     
-    # 2. Identificar las parejas de [Código + Grupo Madre] que YA tienen algún profesor asignado
+    # 2. Identificar las combinaciones ocupadas mirando TODO el archivo (Verdad absoluta)
     df_lineas_ocupadas = df_eventos[df_eventos['Profesor_Original'] != 'Ninguno']
     combinaciones_ocupadas = set(zip(df_lineas_ocupadas['Código'], df_lineas_ocupadas['Grupo_Madre_Analisis']))
     
-    # 3. Extraer las líneas de asignaturas madre reales (teorías puras)
-    df_madres_reales = df_eventos[df_eventos['Grupo'].isin(["AM", "BM", "AT", "BT"])].drop_duplicates(subset=['Código', 'Grupo'])
+    # 3. Extraer las madres reales SOLO de los datos que cumplen tus filtros actuales
+    # ⚠️ IMPORTANTE: Cambia 'df_filtrado' por el nombre de tu variable de datos filtrados
+    df_disponibles['Grupo_Madre_Analisis'] = df_disponibles['Grupo'].apply(obtener_grupo_madre)
+    df_madres_reales = df_disponibles[df_disponibles['Grupo'].isin(["AM", "BM", "AT", "BT"])].drop_duplicates(subset=['Código', 'Grupo'])
     
-    # 4. Filtrar cuáles están 100% libres (es decir, ni la teoría ni ningún desdoble asociado tiene profesor)
+    # 4. Filtrar cuáles están 100% libres cruzando lo visible con la verdad absoluta
     lista_desplegable_libres = []
     for _, r in df_madres_reales.iterrows():
-        clave_actual = (r['Código'], r['Grupo']) # En las asignaturas madre, su grupo coincide con su raíz
+        clave_actual = (r['Código'], r['Grupo'])
         if clave_actual not in combinaciones_ocupadas:
             lista_desplegable_libres.append(
-                f"**[{r['Código']}] {r['Asignatura']}** ({r['Grupo']}) - {r['Titulación']} ({r['Semestre']})"
+                f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) - {r['Titulación']} | 🏫 {r['Campus']}"
             )
     
-    # 5. Interfaz gráfica en formato expander (Visualización en Lista)
-    with st.expander(f"🔍 Ver Asignaturas Completamente Libres ({len(lista_desplegable_libres)})", expanded=False):
+    # 5. Interfaz gráfica
+    with st.expander(f"🔍 Ver Asignaturas Completamente Libres (acorde a los filtros) ({len(lista_desplegable_libres)})", expanded=False):
         if lista_desplegable_libres:
-            st.write("Las siguientes asignaturas principales y sus desdobles no tienen asignado ningún docente:")
-            # Recorremos la lista y mostramos cada asignatura como un punto de viñeta
+            st.write("Las siguientes asignaturas (que cumplen tus filtros actuales) no tienen asignado ningún docente:")
             for asig in lista_desplegable_libres:
                 st.markdown(f"• {asig}")
         else:
-            st.info("No quedan asignaturas completamente libres en la oferta.")
+            st.info("No quedan asignaturas completamente libres que coincidan con los filtros aplicados.")
 
     # Matriz Solapamientos
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]

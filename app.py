@@ -346,8 +346,8 @@ with tab1:
     label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
     lista_opciones_id = sorted(list(label_dict.keys()))
 
-    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES (CON FILTROS APLICADOS) ---
-    # 1. Función para asociar cualquier línea (Teoría o Desdoble) con su Grupo Madre (AM, BM, AT, BT)
+    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES Y A LA MITAD (FAMILIA COMPLETA) ---
+    # 1. Función para asociar cualquier línea con su Grupo Madre (AM, BM, AT, BT)
     def obtener_grupo_madre(grupo):
         g_str = str(grupo)
         for m in ["AM", "BM", "AT", "BT"]:
@@ -355,35 +355,73 @@ with tab1:
                 return m
         return g_str
 
-    # Creamos una columna temporal en el df GLOBAL para saber qué está ocupado realmente
     df_eventos['Grupo_Madre_Analisis'] = df_eventos['Grupo'].apply(obtener_grupo_madre)
-    
-    # 2. Identificar las combinaciones ocupadas mirando TODO el archivo (Verdad absoluta)
-    df_lineas_ocupadas = df_eventos[df_eventos['Profesor_Original'] != 'Ninguno']
-    combinaciones_ocupadas = set(zip(df_lineas_ocupadas['Código'], df_lineas_ocupadas['Grupo_Madre_Analisis']))
-    
-    # 3. Extraer las madres reales SOLO de los datos que cumplen tus filtros actuales
-    # ⚠️ IMPORTANTE: Cambia 'df_filtrado' por el nombre de tu variable de datos filtrados
-    df_disponibles['Grupo_Madre_Analisis'] = df_disponibles['Grupo'].apply(obtener_grupo_madre)
-    df_madres_reales = df_disponibles[df_disponibles['Grupo'].isin(["AM", "BM", "AT", "BT"])].drop_duplicates(subset=['Código', 'Grupo'])
-    
-    # 4. Filtrar cuáles están 100% libres cruzando lo visible con la verdad absoluta
+
+    # 2. Identificar qué familias están 100% libres mirando df_eventos global
+    familias_ocupadas = set()
+    for (cod, g_madre), df_grupo in df_eventos.groupby(['Código', 'Grupo_Madre_Analisis']):
+        if (df_grupo['Profesor_Original'] != 'Ninguno').any():
+            familias_ocupadas.add((cod, g_madre))
+
+    # 3. Aislar las filas ÚNICAS en la vista actual (una por grupo/subgrupo)
+    df_unicos_disp = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).copy()
+    df_unicos_disp['Grupo_Madre_Analisis'] = df_unicos_disp['Grupo'].apply(obtener_grupo_madre)
+
+    # Extraemos solo las madres para evaluar si cumplen la condición inicial
+    df_madres_filtradas = df_unicos_disp[df_unicos_disp['Grupo'].isin(["AM", "BM", "AT", "BT"])]
+
     lista_desplegable_libres = []
-    for _, r in df_madres_reales.iterrows():
-        clave_actual = (r['Código'], r['Grupo'])
-        if clave_actual not in combinaciones_ocupadas:
-            lista_desplegable_libres.append(
-                f"[{r['Código']}] {r['Asignatura']} ({r['Grupo']}) - {r['Titulación']} | 🏫 {r['Campus']}"
+    lista_desplegable_mitad = []
+
+    for _, r in df_madres_filtradas.iterrows():
+        cod = r['Código']
+        grupo = r['Grupo']
+        clave = (cod, grupo)
+        
+        # Actualizamos el texto para indicar que incluye desdobles
+        info_base = f"[{cod}] {r['Asignatura']} ({grupo} y desdobles) - {r['Titulación']} | 🏫 {r['Campus']}"
+
+        # A) ¿Está 100% Libre? 
+        if clave not in familias_ocupadas:
+            lista_desplegable_libres.append(info_base)
+
+        # B) ¿Está exactamente a la mitad la TEORÍA?
+        h_tot_madre = pd.to_numeric(r['Horas_Totales'], errors='coerce')
+        h_disp_madre = pd.to_numeric(r['Horas_Disponibles'], errors='coerce')
+
+        if h_tot_madre > 0 and abs(h_disp_madre - (h_tot_madre / 2)) < 0.1:
+            # ¡BINGO! La madre está a la mitad. Ahora sumamos toda su familia (Madre + Subgrupos)
+            df_familia = df_unicos_disp[(df_unicos_disp['Código'] == cod) & (df_unicos_disp['Grupo_Madre_Analisis'] == grupo)]
+            
+            h_tot_familia = pd.to_numeric(df_familia['Horas_Totales'], errors='coerce').fillna(0).sum()
+            h_disp_familia = pd.to_numeric(df_familia['Horas_Disponibles'], errors='coerce').fillna(0).sum()
+
+            estado_txt = str(r['Estado_Ocupacion']).split(' (Quedan')[0]
+            
+            # Limpiamos decimales para la visualización
+            h_disp_fmt = int(h_disp_familia) if h_disp_familia % 1 == 0 else h_disp_familia
+            h_tot_fmt = int(h_tot_familia) if h_tot_familia % 1 == 0 else h_tot_familia
+
+            lista_desplegable_mitad.append(
+                f"{info_base} ➔ 🕒 Libres {h_disp_fmt}h de {h_tot_fmt}h (Total Familia) ➔ 🧑‍🏫 {estado_txt}"
             )
-    
-    # 5. Interfaz gráfica
-    with st.expander(f"🔍 Ver Asignaturas Completamente Libres (acorde a los filtros) ({len(lista_desplegable_libres)})", expanded=False):
+
+    # 4. Interfaz Gráfica
+    with st.expander(f"🔍 Ver Asignaturas Completamente Libres ({len(lista_desplegable_libres)})", expanded=False):
         if lista_desplegable_libres:
-            st.write("Las siguientes asignaturas (que cumplen tus filtros actuales) no tienen asignado ningún docente:")
+            st.write("Las siguientes asignaturas (que cumplen tus filtros actuales) no tienen asignado ningún docente en ninguna de sus líneas:")
             for asig in lista_desplegable_libres:
                 st.markdown(f"• {asig}")
         else:
             st.info("No quedan asignaturas completamente libres que coincidan con los filtros aplicados.")
+
+    with st.expander(f"⚖️ Ver Asignaturas Exactamente a la Mitad ({len(lista_desplegable_mitad)})", expanded=False):
+        if lista_desplegable_mitad:
+            st.write("Las siguientes asignaturas (y sus desdobles asociados) tienen exactamente el 50% de la carga disponible:")
+            for asig in lista_desplegable_mitad:
+                st.markdown(f"• {asig}")
+        else:
+            st.info("No hay asignaturas divididas exactamente a la mitad con los filtros actuales.")
 
     # Matriz Solapamientos
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]

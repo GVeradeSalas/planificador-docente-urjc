@@ -397,6 +397,7 @@ with tab1:
             h_disp_familia = pd.to_numeric(df_familia['Horas_Disponibles'], errors='coerce').fillna(0).sum()
 
             estado_txt = str(r['Estado_Ocupacion']).split(' (Quedan')[0]
+            estado_txt = re.sub(r'\s*\([\d.,]+h?\)', '', estado_txt).strip()
             
             # Limpiamos decimales para la visualización
             h_disp_fmt = int(h_disp_familia) if h_disp_familia % 1 == 0 else h_disp_familia

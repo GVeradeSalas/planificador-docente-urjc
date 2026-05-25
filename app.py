@@ -109,7 +109,7 @@ def cargar_y_procesar(ruta_archivo):
         elif horas_disponibles == 0:
             estado_ocupacion = f"Ocupada por {', '.join(nombres_desc)}"
         else:
-            estado_ocupacion = f"Compartida con {', '.join(nombres_desc)}"
+            estado_ocupacion = f"Compartida con {', '.join(nombres_desc)} (Quedan {horas_disponibles}h)"
 
         semestre_actual = str(row.get('Semestre', 'Desconocido')).strip()
         titulacion_actual = str(row.get('Titulación', 'Desconocido')).strip()

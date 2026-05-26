@@ -346,7 +346,7 @@ with tab1:
     label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
     lista_opciones_id = sorted(list(label_dict.keys()))
 
-    # --- CÁLCULO DE ASIGNATURAS COMPLETAMENTE LIBRES Y A LA MITAD (FAMILIA COMPLETA) ---
+    # --- CÁLCULO DE ASIGNATURAS LIBRES, A LA MITAD Y DESDOBLES SUELTOS ---
     # 1. Función para asociar cualquier línea con su Grupo Madre (AM, BM, AT, BT)
     def obtener_grupo_madre(grupo):
         g_str = str(grupo)
@@ -357,64 +357,87 @@ with tab1:
 
     df_eventos['Grupo_Madre_Analisis'] = df_eventos['Grupo'].apply(obtener_grupo_madre)
 
-    # 2. Identificar qué familias están 100% libres mirando df_eventos global
+    # 2. Mapa global de ocupación: ¿Quién está en cada familia?
     familias_ocupadas = set()
+    compis_familia = {}
+    
     for (cod, g_madre), df_grupo in df_eventos.groupby(['Código', 'Grupo_Madre_Analisis']):
-        if (df_grupo['Profesor_Original'] != 'Ninguno').any():
+        df_asignados = df_grupo[df_grupo['Profesor_Original'] != 'Ninguno']
+        if not df_asignados.empty:
             familias_ocupadas.add((cod, g_madre))
+            # Guardamos quiénes están ya en esta familia para chivarlo luego
+            profesores = df_asignados['Profesor_Original'].unique().tolist()
+            compis_familia[(cod, g_madre)] = [p for p in profesores if str(p).strip() not in ['nan', 'None', '', 'Ninguno']]
 
     # 3. Aislar las filas ÚNICAS en la vista actual (una por grupo/subgrupo)
     df_unicos_disp = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).copy()
     df_unicos_disp['Grupo_Madre_Analisis'] = df_unicos_disp['Grupo'].apply(obtener_grupo_madre)
 
-    # Extraemos solo las madres para evaluar si cumplen la condición inicial
-    df_madres_filtradas = df_unicos_disp[df_unicos_disp['Grupo'].isin(["AM", "BM", "AT", "BT"])]
-
     lista_desplegable_libres = []
     lista_desplegable_mitad = []
+    lista_desplegable_desdobles = []
 
-    for _, r in df_madres_filtradas.iterrows():
+    # Iteramos sobre todas las líneas únicas (tanto madres como desdobles)
+    for _, r in df_unicos_disp.iterrows():
         cod = r['Código']
-        grupo = r['Grupo']
-        clave = (cod, grupo)
+        grupo_real = r['Grupo']
+        g_madre = r['Grupo_Madre_Analisis']
+        clave_familia = (cod, g_madre)
         
-        # Actualizamos el texto para indicar que incluye desdobles
-        info_base = f"[{cod}] {r['Asignatura']} ({grupo} y desdobles) - {r['Titulación']} | 🏫 {r['Campus']}"
-
-        # A) ¿Está 100% Libre? 
-        if clave not in familias_ocupadas:
-            lista_desplegable_libres.append(info_base)
-
-        # B) ¿Está exactamente a la mitad la TEORÍA?
-        h_tot_madre = pd.to_numeric(r['Horas_Totales'], errors='coerce')
-        h_disp_madre = pd.to_numeric(r['Horas_Disponibles'], errors='coerce')
-
-        if h_tot_madre > 0 and abs(h_disp_madre - (h_tot_madre / 2)) < 0.1:
-            # ¡BINGO! La madre está a la mitad. Ahora sumamos toda su familia (Madre + Subgrupos)
-            df_familia = df_unicos_disp[(df_unicos_disp['Código'] == cod) & (df_unicos_disp['Grupo_Madre_Analisis'] == grupo)]
+        es_madre = grupo_real in ["AM", "BM", "AT", "BT"]
+        
+        h_tot_linea = pd.to_numeric(r['Horas_Totales'], errors='coerce')
+        h_disp_linea = pd.to_numeric(r['Horas_Disponibles'], errors='coerce')
+        
+        # --- LÓGICA PARA ASIGNATURAS MADRE (100% Libres o 50% Familia) ---
+        if es_madre:
+            info_madre = f"[{cod}] {r['Asignatura']} ({grupo_real} y desdobles) - {r['Titulación']} | 🏫 {r['Campus']}"
             
-            h_tot_familia = pd.to_numeric(df_familia['Horas_Totales'], errors='coerce').fillna(0).sum()
-            h_disp_familia = pd.to_numeric(df_familia['Horas_Disponibles'], errors='coerce').fillna(0).sum()
+            # A) ¿Está la familia 100% Libre? 
+            if clave_familia not in familias_ocupadas:
+                lista_desplegable_libres.append(info_madre)
 
-            estado_txt = str(r['Estado_Ocupacion']).split(' (Quedan')[0]
-            estado_txt = re.sub(r'\s*\([\d.,]+h?\)', '', estado_txt).strip()
-            
-            # Limpiamos decimales para la visualización
-            h_disp_fmt = int(h_disp_familia) if h_disp_familia % 1 == 0 else h_disp_familia
-            h_tot_fmt = int(h_tot_familia) if h_tot_familia % 1 == 0 else h_tot_familia
+            # B) ¿Está exactamente a la mitad la TEORÍA?
+            elif h_tot_linea > 0 and abs(h_disp_linea - (h_tot_linea / 2)) < 0.1:
+                df_familia = df_unicos_disp[(df_unicos_disp['Código'] == cod) & (df_unicos_disp['Grupo_Madre_Analisis'] == g_madre)]
+                h_tot_fam = pd.to_numeric(df_familia['Horas_Totales'], errors='coerce').fillna(0).sum()
+                h_disp_fam = pd.to_numeric(df_familia['Horas_Disponibles'], errors='coerce').fillna(0).sum()
 
-            lista_desplegable_mitad.append(
-                f"{info_base} ➔ 🕒 Libres {h_disp_fmt}h de {h_tot_fmt}h (Total Familia) ➔ 🧑‍🏫 {estado_txt}"
-            )
+                estado_txt = str(r['Estado_Ocupacion']).split(' (Quedan')[0]
+                estado_txt = re.sub(r'\s*\([\d.,]+h?\)', '', estado_txt).strip()
+                
+                h_disp_fmt = int(h_disp_fam) if h_disp_fam % 1 == 0 else h_disp_fam
+                h_tot_fmt = int(h_tot_fam) if h_tot_fam % 1 == 0 else h_tot_fam
+
+                lista_desplegable_mitad.append(
+                    f"{info_madre} ➔ 🕒 Libres {h_disp_fmt}h de {h_tot_fmt}h (Familia) ➔ 🧑‍🏫 {estado_txt}"
+                )
+                
+        # --- LÓGICA PARA DESDOBLES POR CUBRIR ---
+        else:
+            # Mostramos el desdoble siempre que le queden horas libres (ya sea entero o empezado)
+            if h_tot_linea > 0 and h_disp_linea > 0.1:
+                h_disp_fmt = int(h_disp_linea) if h_disp_linea % 1 == 0 else h_disp_linea
+                h_tot_fmt = int(h_tot_linea) if h_tot_linea % 1 == 0 else h_tot_linea
+                
+                # Mantenemos quién está en la familia global
+                compis = compis_familia.get(clave_familia, [])
+                if compis:
+                    compis_str = ", ".join(compis)
+                else:
+                    compis_str = "Nadie (Familia libre)"
+                
+                info_desdoble = f"[{cod}] {r['Asignatura']} ({grupo_real}) - {r['Titulación']} | 🏫 {r['Campus']} ➔ 🕒 Faltan {h_disp_fmt}h de {h_tot_fmt}h ➔ 🧑‍🏫 Familia compartida con: {compis_str}"
+                lista_desplegable_desdobles.append(info_desdoble)
 
     # 4. Interfaz Gráfica
     with st.expander(f"🔍 Ver Asignaturas Completamente Libres ({len(lista_desplegable_libres)})", expanded=False):
         if lista_desplegable_libres:
-            st.write("Las siguientes asignaturas (que cumplen tus filtros actuales) no tienen asignado ningún docente en ninguna de sus líneas:")
+            st.write("Las siguientes asignaturas y todos sus desdobles no tienen asignado ningún docente:")
             for asig in lista_desplegable_libres:
                 st.markdown(f"• {asig}")
         else:
-            st.info("No quedan asignaturas completamente libres que coincidan con los filtros aplicados.")
+            st.info("No quedan asignaturas completamente libres con los filtros actuales.")
 
     with st.expander(f"⚖️ Ver Asignaturas Exactamente a la Mitad ({len(lista_desplegable_mitad)})", expanded=False):
         if lista_desplegable_mitad:
@@ -423,6 +446,14 @@ with tab1:
                 st.markdown(f"• {asig}")
         else:
             st.info("No hay asignaturas divididas exactamente a la mitad con los filtros actuales.")
+
+    with st.expander(f"🧩 Ver Desdobles por Cubrir ({len(lista_desplegable_desdobles)})", expanded=False):
+        if lista_desplegable_desdobles:
+            st.write("Listado de subgrupos y desdobles que aún tienen horas pendientes de asignar (completamente libres o empezados):")
+            for desdoble in lista_desplegable_desdobles:
+                st.markdown(f"• {desdoble}")
+        else:
+            st.info("Todos los desdobles están cubiertos al 100% con los filtros actuales.")
 
     # Matriz Solapamientos
     sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]

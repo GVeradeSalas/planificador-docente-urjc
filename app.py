@@ -346,6 +346,53 @@ with tab1:
     label_dict = df_disponibles.drop_duplicates(subset=['Código', 'Grupo']).set_index('Asig_Grupo_ID')['Asig_Grupo_Label'].to_dict()
     lista_opciones_id = sorted(list(label_dict.keys()))
 
+    # --- MATRIZ SOLAPAMIENTOS Y MODO ESTRICTO (AHORA FILTRA df_disponibles PRIMERO) ---
+    sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]
+    busy_dict = {}
+    conflictos_exist = False
+    
+    if not df_inmutables.empty:
+        for _, r in df_inmutables.iterrows():
+            f = r['Fecha_str']
+            if f not in busy_dict: busy_dict[f] = []
+            busy_dict[f].append((r['Hora Inicio'], r['Hora Fin']))
+            
+    if sel_actual:
+        df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(sel_actual)]
+        for _, r in df_sel_temp.iterrows():
+            f = r['Fecha_str']
+            hi, hf = r['Hora Inicio'], r['Hora Fin']
+            if f not in busy_dict: busy_dict[f] = []
+            for b_hi, b_hf in busy_dict[f]:
+                if hi < b_hf and b_hi < hf: conflictos_exist = True
+            busy_dict[f].append((hi, hf))
+
+    if strict_mode:
+        if conflictos_exist:
+            st.session_state['seleccion_asignaturas'] = []
+            st.warning("⚠️ Modo estricto activado: Se reinicia la NUEVA elección al detectar solapamientos.")
+            st.rerun()
+        else:
+            valid_options = []
+            for ag_id, grp_df in df_disponibles.groupby('Asig_Grupo_ID'):
+                if ag_id in sel_actual:
+                    valid_options.append(ag_id)
+                    continue
+                overlap = False
+                for _, r in grp_df.iterrows():
+                    f = r['Fecha_str']
+                    hi, hf = r['Hora Inicio'], r['Hora Fin']
+                    if f in busy_dict:
+                        for b_hi, b_hf in busy_dict[f]:
+                            if hi < b_hf and b_hi < hf: overlap = True; break
+                    if overlap: break
+                if not overlap: valid_options.append(ag_id)
+            
+            lista_opciones_id = [x for x in lista_opciones_id if x in valid_options]
+            # Filtramos el dataframe base para que los visores también omitan las asignaturas con solape
+            df_disponibles = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(valid_options)].copy()
+
+
     # --- CÁLCULO DE ASIGNATURAS LIBRES, A LA MITAD Y DESDOBLES/REMANENTES ---
     def obtener_grupo_madre(grupo):
         g_str = str(grupo)
@@ -458,48 +505,6 @@ with tab1:
         else:
             st.info("Todos los desdobles y remanentes están cubiertos al 100% con los filtros actuales.")
 
-    # Matriz Solapamientos
-    sel_actual = [x for x in st.session_state.get('seleccion_asignaturas', []) if x in lista_opciones_id]
-    busy_dict = {}
-    conflictos_exist = False
-    
-    if not df_inmutables.empty:
-        for _, r in df_inmutables.iterrows():
-            f = r['Fecha_str']
-            if f not in busy_dict: busy_dict[f] = []
-            busy_dict[f].append((r['Hora Inicio'], r['Hora Fin']))
-            
-    if sel_actual:
-        df_sel_temp = df_disponibles[df_disponibles['Asig_Grupo_ID'].isin(sel_actual)]
-        for _, r in df_sel_temp.iterrows():
-            f = r['Fecha_str']
-            hi, hf = r['Hora Inicio'], r['Hora Fin']
-            if f not in busy_dict: busy_dict[f] = []
-            for b_hi, b_hf in busy_dict[f]:
-                if hi < b_hf and b_hi < hf: conflictos_exist = True
-            busy_dict[f].append((hi, hf))
-
-    if strict_mode:
-        if conflictos_exist:
-            st.session_state['seleccion_asignaturas'] = []
-            st.warning("⚠️ Modo estricto activado: Se reinicia la NUEVA elección al detectar solapamientos.")
-            st.rerun()
-        else:
-            valid_options = []
-            for ag_id, grp_df in df_disponibles.groupby('Asig_Grupo_ID'):
-                if ag_id in sel_actual:
-                    valid_options.append(ag_id)
-                    continue
-                overlap = False
-                for _, r in grp_df.iterrows():
-                    f = r['Fecha_str']
-                    hi, hf = r['Hora Inicio'], r['Hora Fin']
-                    if f in busy_dict:
-                        for b_hi, b_hf in busy_dict[f]:
-                            if hi < b_hf and b_hi < hf: overlap = True; break
-                    if overlap: break
-                if not overlap: valid_options.append(ag_id)
-            lista_opciones_id = [x for x in lista_opciones_id if x in valid_options]
 
     # Panel Dual
     st.markdown("---")
@@ -845,17 +850,29 @@ with tab5:
         porcentaje_exacto = (horas_prof / fuerza_real) * 100 if fuerza_real > 0 else 0
         
         col1, col2, col3 = st.columns([1, 1, 2])
-        with col1: st.metric(label="Horas asignadas", value=f"{horas_prof} h")
-        with col2: st.metric(label="POD Objetivo (Fuerza)", value=f"{fuerza_real} h", delta=f"-{descargas}h reducciones" if descargas != 0 else None, delta_color="off")
+        with col1: st.metric(label="Horas asignadas", value=f"{horas_prof:g} h")
+        with col2: st.metric(label="POD Objetivo (Fuerza)", value=f"{fuerza_real:g} h", delta=f"-{descargas:g}h reducciones" if descargas != 0 else None, delta_color="off")
         with col3:
             st.write(f"**Progreso del POD: {porcentaje_exacto:.1f}%**")
             st.progress(min(horas_prof / fuerza_real, 1.0) if fuerza_real > 0 else 0.0)
             falta = fuerza_real - horas_prof
-            if falta > 9: st.warning(f"💡 **Faltan {falta}h** (Participará en siguientes vueltas).")
-            elif falta > 0 and falta <= 9: st.success(f"✅ **POD completado.** (Le faltan {falta}h pero está dentro de la horquilla permitida).")
+            if falta > 9: st.warning(f"💡 **Faltan {falta:g}h** (Participará en siguientes vueltas).")
+            elif falta > 0 and falta <= 9: st.success(f"✅ **POD completado.** (Le faltan {falta:g}h pero está dentro de la horquilla permitida).")
             elif horas_prof == fuerza_real: st.success("✅ **POD completado exactamente al 100%.**")
-            else: st.success(f"🔥 **POD superado por {abs(falta)}h** (Por encima del 100%).")
+            else: st.success(f"🔥 **POD superado por {abs(falta):g}h** (Por encima del 100%).")
         
+        # --- NUEVO: DESGLOSE DE ASIGNATURAS ---
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("#### 📋 Desglose de Asignaturas")
+        df_prof_resumen = df_prof.drop_duplicates(subset=['Código', 'Grupo'])
+        cols = st.columns(3)
+        for idx, row in df_prof_resumen.reset_index(drop=True).iterrows():
+            with cols[idx % 3]:
+                h_prof_line = row['Horas_Profesor']
+                h_fmt = int(h_prof_line) if h_prof_line % 1 == 0 else h_prof_line
+                st.markdown(f"**[{row['Código']}] {row['Asignatura']}**<br><span style='color:#555;'>Grupo {row['Grupo']} | <b>{h_fmt} h</b></span>", unsafe_allow_html=True)
+
+        # --- CALENDARIOS ---
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("#### 📅 Cuadrante Semanal del Compañero")
         for semestre in sorted(df_prof['Semestre'].astype(str).unique()):
@@ -872,8 +889,10 @@ with tab5:
         for _, r in df_leyenda_prof.iterrows():
             bg = mapa_colores.get(r['Código'], "#E3F2FD")
             col1, col2, col3 = st.columns([0.5, 4.5, 5])
+            h_prof_line = r['Horas_Profesor']
+            h_fmt = int(h_prof_line) if h_prof_line % 1 == 0 else h_prof_line
             with col1: st.markdown(f"<div style='background-color: {bg}; width: 100%; height: 40px; border-radius: 5px; border: 1px solid #ccc;'></div>", unsafe_allow_html=True)
-            with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} | {r['Semestre']}</span>", unsafe_allow_html=True)
+            with col2: st.markdown(f"**[{r['Código']}] {r['Asignatura']}**<br><span style='color: #666; font-size: 0.9em;'>Grupo: {r['Grupo']} (<b>{h_fmt} h</b>) | {r['Semestre']}</span>", unsafe_allow_html=True)
             with col3: st.markdown(f"🎓 {r['Titulación']}<br>🏫 {r['Campus']} | {r['Turno']}", unsafe_allow_html=True)
             st.markdown("---")
 
@@ -917,10 +936,10 @@ with tab6:
     balance_activo = asignadas_activos - fuerza_activos
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("📚 Asig. Área", f"{total_horas_area} h")
-    col2.metric("🧑‍🏫 Asignadas", f"{total_asignadas} h")
-    col3.metric("⚖️ Bal. Área", f"{balance} h", delta=f"{signo_balance}{balance} h", delta_color="normal" if balance >= 0 else "inverse")
-    col4.metric("⚖️ Bal. Activos", f"{balance_activo} h", delta=f"{'+' if balance_activo > 0 else ''}{balance_activo} h", delta_color="normal" if balance_activo >= 0 else "inverse")
+    col1.metric("📚 Asig. Área", f"{total_horas_area:g} h")
+    col2.metric("🧑‍🏫 Asignadas", f"{total_asignadas:g} h")
+    col3.metric("⚖️ Bal. Área", f"{balance:g} h", delta=f"{signo_balance}{balance:g} h", delta_color="normal" if balance >= 0 else "inverse")
+    col4.metric("⚖️ Bal. Activos", f"{balance_activo:g} h", delta=f"{'+' if balance_activo > 0 else ''}{balance_activo:g} h", delta_color="normal" if balance_activo >= 0 else "inverse")
     col5.metric("📊 Progreso", f"{pct_global:.1f} %")
     
     st.progress(min(total_asignadas / total_horas_area, 1.0) if total_horas_area > 0 else 0.0)

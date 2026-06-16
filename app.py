@@ -258,7 +258,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "👤 MI POD: Conflictos", 
     "👥 GENERAL: Vista individual", 
     "🌐 GENERAL: Estado Global",
-    "🎨 MODO CREATIVO"
+    "🎨 Modo creativo"
 ])
 
 # --- BARRA LATERAL (Solo Resumen) ---
@@ -976,56 +976,107 @@ with tab6:
 
 with tab7:
     st.header("🎨 Modo Creativo: Reasignación Manual")
-    st.markdown("Utiliza este panel para resolver los últimos flecos, intercambiar grupos entre compañeros o vaciar asignaturas. **Los cambios se aplican al instante en todas las pestañas.**")
+    st.markdown("Utiliza este panel para resolver los últimos flecos, traspasar horas (totales o parciales) entre compañeros o liberar asignaturas. **Los cambios se aplican al instante en todas las pestañas.**")
 
-    # 1. Buscador de Asignatura y Grupo
-    df_unicos_creativo = st.session_state['df_eventos'].drop_duplicates(subset=['Código', 'Grupo']).copy()
-    df_unicos_creativo['Etiqueta_Asig'] = "[" + df_unicos_creativo['Código'].astype(str) + "] " + df_unicos_creativo['Asignatura']
+    # 1. Buscador de Asignatura (Ahora incluye la Titulación)
+    # Agrupamos por profesor también para que salgan todas las "porciones" si la clase ya está compartida
+    df_unicos_creativo = st.session_state['df_eventos'].drop_duplicates(subset=['Código', 'Grupo', 'Profesor_Original']).copy()
+    df_unicos_creativo['Etiqueta_Asig'] = "[" + df_unicos_creativo['Código'].astype(str) + "] " + df_unicos_creativo['Asignatura'] + " - " + df_unicos_creativo['Titulación']
     
     lista_asigs_edit = sorted(df_unicos_creativo['Etiqueta_Asig'].unique())
     
-    colC1, colC2, colC3 = st.columns(3)
-    with colC1:
-        asig_a_editar = st.selectbox("1️⃣ Selecciona la Asignatura:", ["-- Seleccionar --"] + lista_asigs_edit)
+    asig_a_editar = st.selectbox("1️⃣ Selecciona la Asignatura:", ["-- Seleccionar --"] + lista_asigs_edit)
     
     if asig_a_editar != "-- Seleccionar --":
-        df_asig_filtrada = df_unicos_creativo[df_unicos_creativo['Etiqueta_Asig'] == asig_a_editar]
-        lista_grupos_edit = sorted(df_asig_filtrada['Grupo'].unique())
+        df_asig_filtrada = df_unicos_creativo[df_unicos_creativo['Etiqueta_Asig'] == asig_a_editar].copy()
         
-        with colC2:
-            grupo_a_editar = st.selectbox("2️⃣ Selecciona el Grupo/Desdoble:", ["-- Seleccionar --"] + lista_grupos_edit)
-            
-        if grupo_a_editar != "-- Seleccionar --":
-            # Extraemos la información actual de esa clase exacta
-            codigo_clase = df_asig_filtrada.iloc[0]['Código']
-            fila_actual = df_asig_filtrada[df_asig_filtrada['Grupo'] == grupo_a_editar].iloc[0]
+        # 2. Selector de Grupo + Profesor + Horas Actuales
+        # Limpiamos los decimales para que se vea bonito si son enteros (ej: 60.0 -> 60)
+        df_asig_filtrada['Horas_fmt'] = df_asig_filtrada['Horas_Profesor'].apply(lambda x: int(x) if x % 1 == 0 else x)
+        df_asig_filtrada['Etiqueta_Grupo'] = "Grupo " + df_asig_filtrada['Grupo'].astype(str) + " ➔ " + df_asig_filtrada['Profesor_Original'].astype(str) + " (" + df_asig_filtrada['Horas_fmt'].astype(str) + "h)"
+        
+        lista_grupos_edit = sorted(df_asig_filtrada['Etiqueta_Grupo'].unique())
+        
+        grupo_etiqueta = st.selectbox("2️⃣ Selecciona la porción exacta a modificar:", ["-- Seleccionar --"] + lista_grupos_edit)
+        
+        if grupo_etiqueta != "-- Seleccionar --":
+            # Extraemos la información exacta de la línea seleccionada
+            fila_actual = df_asig_filtrada[df_asig_filtrada['Etiqueta_Grupo'] == grupo_etiqueta].iloc[0]
+            codigo_clase = fila_actual['Código']
+            grupo_real = fila_actual['Grupo']
             profesor_actual = fila_actual['Profesor_Original']
-            horas_clase = fila_actual['Horas_Profesor']
+            horas_clase = float(fila_actual['Horas_Profesor'])
             
-            with colC3:
-                lista_todos_profs = ["Ninguno"] + sorted([p for p in st.session_state['df_eventos']['Profesor_Original'].unique() if p != "Ninguno"])
-                idx_prof_actual = lista_todos_profs.index(profesor_actual) if profesor_actual in lista_todos_profs else 0
-                
-                nuevo_profesor = st.selectbox("3️⃣ Asignar al docente:", lista_todos_profs, index=idx_prof_actual)
-
             st.markdown("---")
-            colA, colB = st.columns([3, 1])
+            colA, colB = st.columns(2)
+            
             with colA:
-                st.info(f"Vas a modificar el **Grupo {grupo_a_editar}** ({horas_clase}h). Pasará de estar asignado a **{profesor_actual}** a ser de **{nuevo_profesor}**.")
+                lista_todos_profs = ["Ninguno"] + sorted([p for p in st.session_state['df_eventos']['Profesor_Original'].unique() if p != "Ninguno"])
+                nuevo_profesor = st.selectbox("3️⃣ Transferir horas a:", lista_todos_profs, help="Elige 'Ninguno' si quieres liberar estas horas al área.")
             
             with colB:
-                st.markdown("<br>", unsafe_allow_html=True) # Espaciador
+                # El deslizador / selector numérico de horas (por defecto coge el máximo)
+                horas_a_transferir = st.number_input(
+                    "4️⃣ Cantidad de horas a transferir:", 
+                    min_value=0.5, 
+                    max_value=horas_clase, 
+                    value=horas_clase, 
+                    step=0.5
+                )
+            
+            if nuevo_profesor == profesor_actual:
+                st.info("💡 El profesor destino es el mismo que el actual. Selecciona un docente diferente para realizar cambios.")
+            else:
+                # Mensajes dinámicos de advertencia según la cantidad elegida
+                if horas_a_transferir == horas_clase:
+                    st.warning(f"Vas a traspasar **todas las horas ({horas_clase:g}h)** del Grupo {grupo_real} de **{profesor_actual}** a **{nuevo_profesor}**.")
+                else:
+                    st.warning(f"Traspaso parcial: **{profesor_actual}** se quedará con {horas_clase - horas_a_transferir:g}h y **{nuevo_profesor}** recibirá **{horas_a_transferir:g}h** del Grupo {grupo_real}.")
+                    
                 if st.button("⚡ Aplicar Cambio en el POD", use_container_width=True, type="primary"):
-                    # Aplicamos el cambio a TODAS las líneas del calendario de esa asignatura y grupo
-                    mask = (st.session_state['df_eventos']['Código'] == codigo_clase) & (st.session_state['df_eventos']['Grupo'] == grupo_a_editar)
-                    st.session_state['df_eventos'].loc[mask, 'Profesor_Original'] = nuevo_profesor
-                    st.success("¡Cambio aplicado con éxito! Recargando...")
+                    # 1. Localizamos la máscara de las filas que pertenecen al profesor "donante"
+                    mask_old = (st.session_state['df_eventos']['Código'] == codigo_clase) & \
+                               (st.session_state['df_eventos']['Grupo'] == grupo_real) & \
+                               (st.session_state['df_eventos']['Profesor_Original'] == profesor_actual)
+                    
+                    # 2. Comprobamos si el "receptor" YA tenía horas en ese mismo grupo (ej. para fusionarlas)
+                    mask_new = (st.session_state['df_eventos']['Código'] == codigo_clase) & \
+                               (st.session_state['df_eventos']['Grupo'] == grupo_real) & \
+                               (st.session_state['df_eventos']['Profesor_Original'] == nuevo_profesor)
+
+                    if mask_new.any():
+                        # A) El receptor YA existía en este grupo: Le sumamos las horas
+                        st.session_state['df_eventos'].loc[mask_new, 'Horas_Profesor'] += horas_a_transferir
+                        
+                        if horas_a_transferir == horas_clase:
+                            # Traspaso total: Eliminamos al donante de este grupo
+                            st.session_state['df_eventos'] = st.session_state['df_eventos'][~mask_old]
+                        else:
+                            # Traspaso parcial: Restamos horas al donante
+                            st.session_state['df_eventos'].loc[mask_old, 'Horas_Profesor'] -= horas_a_transferir
+                    else:
+                        # B) El receptor NO estaba en este grupo
+                        if horas_a_transferir == horas_clase:
+                            # Traspaso total: Simplemente le cambiamos la etiqueta de nombre
+                            st.session_state['df_eventos'].loc[mask_old, 'Profesor_Original'] = nuevo_profesor
+                        else:
+                            # Traspaso parcial: Restamos al donante y clonamos filas para el receptor
+                            st.session_state['df_eventos'].loc[mask_old, 'Horas_Profesor'] -= horas_a_transferir
+                            
+                            filas_nuevas = st.session_state['df_eventos'][mask_old].copy()
+                            filas_nuevas['Profesor_Original'] = nuevo_profesor
+                            filas_nuevas['Horas_Profesor'] = horas_a_transferir
+                            
+                            # Añadimos las nuevas filas al final
+                            st.session_state['df_eventos'] = pd.concat([st.session_state['df_eventos'], filas_nuevas], ignore_index=True)
+                        
+                    st.success("¡Cambio aplicado con éxito! Recargando la vista...")
                     st.rerun()
 
     # 2. Exportación del POD modificado
     st.markdown("---")
     st.subheader("💾 Exportar POD Modificado")
-    st.write("Una vez hayas terminado tus ajustes, puedes descargar el Excel actualizado (mantiene la misma estructura que el original pero con los profesores actualizados).")
+    st.write("Una vez hayas terminado tus ajustes, puedes descargar el Excel actualizado (mantiene la misma estructura que el original pero con los profesores y horas actualizadas).")
     
     # Creamos el buffer de memoria para exportar el Excel
     buffer = io.BytesIO()

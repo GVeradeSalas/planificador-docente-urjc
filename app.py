@@ -1072,20 +1072,3 @@ with tab7:
                         
                     st.success("¡Cambio aplicado con éxito! Recargando la vista...")
                     st.rerun()
-
-    # 2. Exportación del POD modificado
-    st.markdown("---")
-    st.subheader("💾 Exportar POD Modificado")
-    st.write("Una vez hayas terminado tus ajustes, puedes descargar el Excel actualizado (mantiene la misma estructura que el original pero con los profesores y horas actualizadas).")
-    
-    # Creamos el buffer de memoria para exportar el Excel
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        st.session_state['df_eventos'].to_excel(writer, index=False, sheet_name='POD_Editado')
-    
-    st.download_button(
-        label="📥 Descargar Excel del POD Actualizado",
-        data=buffer.getvalue(),
-        file_name=f"POD_Modificado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )

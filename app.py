@@ -263,7 +263,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 # --- BARRA LATERAL (Solo Resumen) ---
 st.sidebar.title("Panel Docente")
-if st.sidebar.button("🔄 Actualizar Datos", use_container_width=True):
+if st.sidebar.button("🔄 Deshacer los cambios", use_container_width=True):
     st.cache_data.clear()
     del st.session_state['df_eventos']
     st.rerun()

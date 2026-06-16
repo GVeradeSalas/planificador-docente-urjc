@@ -241,24 +241,31 @@ def generar_html_calendario(df_calendario, horas_evaluacion, df_fijas, mapa_colo
     lines.append('</div>')
     return "".join(lines)
 
+import io # Añade esto junto a tus otros imports al principio (import pandas as pd, etc.)
+
 # --- CARGA ---
-df_eventos = cargar_y_procesar("POD_2026-27_11-5-2026.xlsx")
+if 'df_eventos' not in st.session_state:
+    st.session_state['df_eventos'] = cargar_y_procesar("POD_2026-27_11-5-2026.xlsx")
+df_eventos = st.session_state['df_eventos']
+
 df_fuerza = cargar_fuerza_docente("Fuerza Docente.xlsx")
 
 # --- DECLARACIÓN PESTAÑAS (Arquitectura Principal) ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "⚙️ MI POD: Selección",
     "👤 MI POD: Horario Semanal", 
     "👤 MI POD: Calendario", 
     "👤 MI POD: Conflictos", 
     "👥 GENERAL: Vista individual", 
-    "🌐 GENERAL: Estado Global"
+    "🌐 GENERAL: Estado Global",
+    "🎨 MODO CREATIVO"
 ])
 
 # --- BARRA LATERAL (Solo Resumen) ---
 st.sidebar.title("Panel Docente")
 if st.sidebar.button("🔄 Actualizar Datos", use_container_width=True):
     st.cache_data.clear()
+    del st.session_state['df_eventos']
     st.rerun()
 
 if df_eventos is None or df_eventos.empty:
@@ -966,3 +973,68 @@ with tab6:
         for p in sorted_profs_display: del p['Original_Index']; del p['Is_Finished']
         
         st.dataframe(pd.DataFrame(sorted_profs_display), column_config={"Profesor": st.column_config.TextColumn("Profesor", width="large"), "Horas Asignadas": st.column_config.NumberColumn("Asig.", format="%d h"), "Objetivo (Fuerza)": st.column_config.NumberColumn("Fuerza", format="%d h"), "Progreso %": st.column_config.NumberColumn("%", format="%.1f %%"), "Ratio": st.column_config.ProgressColumn("Progreso", format="%.2f", min_value=0, max_value=1.0), "Estado": st.column_config.TextColumn("Turno")}, use_container_width=True, hide_index=True)
+
+with tab7:
+    st.header("🎨 Modo Creativo: Reasignación Manual")
+    st.markdown("Utiliza este panel para resolver los últimos flecos, intercambiar grupos entre compañeros o vaciar asignaturas. **Los cambios se aplican al instante en todas las pestañas.**")
+
+    # 1. Buscador de Asignatura y Grupo
+    df_unicos_creativo = st.session_state['df_eventos'].drop_duplicates(subset=['Código', 'Grupo']).copy()
+    df_unicos_creativo['Etiqueta_Asig'] = "[" + df_unicos_creativo['Código'].astype(str) + "] " + df_unicos_creativo['Asignatura']
+    
+    lista_asigs_edit = sorted(df_unicos_creativo['Etiqueta_Asig'].unique())
+    
+    colC1, colC2, colC3 = st.columns(3)
+    with colC1:
+        asig_a_editar = st.selectbox("1️⃣ Selecciona la Asignatura:", ["-- Seleccionar --"] + lista_asigs_edit)
+    
+    if asig_a_editar != "-- Seleccionar --":
+        df_asig_filtrada = df_unicos_creativo[df_unicos_creativo['Etiqueta_Asig'] == asig_a_editar]
+        lista_grupos_edit = sorted(df_asig_filtrada['Grupo'].unique())
+        
+        with colC2:
+            grupo_a_editar = st.selectbox("2️⃣ Selecciona el Grupo/Desdoble:", ["-- Seleccionar --"] + lista_grupos_edit)
+            
+        if grupo_a_editar != "-- Seleccionar --":
+            # Extraemos la información actual de esa clase exacta
+            codigo_clase = df_asig_filtrada.iloc[0]['Código']
+            fila_actual = df_asig_filtrada[df_asig_filtrada['Grupo'] == grupo_a_editar].iloc[0]
+            profesor_actual = fila_actual['Profesor_Original']
+            horas_clase = fila_actual['Horas_Profesor']
+            
+            with colC3:
+                lista_todos_profs = ["Ninguno"] + sorted([p for p in st.session_state['df_eventos']['Profesor_Original'].unique() if p != "Ninguno"])
+                idx_prof_actual = lista_todos_profs.index(profesor_actual) if profesor_actual in lista_todos_profs else 0
+                
+                nuevo_profesor = st.selectbox("3️⃣ Asignar al docente:", lista_todos_profs, index=idx_prof_actual)
+
+            st.markdown("---")
+            colA, colB = st.columns([3, 1])
+            with colA:
+                st.info(f"Vas a modificar el **Grupo {grupo_a_editar}** ({horas_clase}h). Pasará de estar asignado a **{profesor_actual}** a ser de **{nuevo_profesor}**.")
+            
+            with colB:
+                st.markdown("<br>", unsafe_allow_html=True) # Espaciador
+                if st.button("⚡ Aplicar Cambio en el POD", use_container_width=True, type="primary"):
+                    # Aplicamos el cambio a TODAS las líneas del calendario de esa asignatura y grupo
+                    mask = (st.session_state['df_eventos']['Código'] == codigo_clase) & (st.session_state['df_eventos']['Grupo'] == grupo_a_editar)
+                    st.session_state['df_eventos'].loc[mask, 'Profesor_Original'] = nuevo_profesor
+                    st.success("¡Cambio aplicado con éxito! Recargando...")
+                    st.rerun()
+
+    # 2. Exportación del POD modificado
+    st.markdown("---")
+    st.subheader("💾 Exportar POD Modificado")
+    st.write("Una vez hayas terminado tus ajustes, puedes descargar el Excel actualizado (mantiene la misma estructura que el original pero con los profesores actualizados).")
+    
+    # Creamos el buffer de memoria para exportar el Excel
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        st.session_state['df_eventos'].to_excel(writer, index=False, sheet_name='POD_Editado')
+    
+    st.download_button(
+        label="📥 Descargar Excel del POD Actualizado",
+        data=buffer.getvalue(),
+        file_name=f"POD_Modificado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
